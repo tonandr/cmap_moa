@@ -1,0 +1,805 @@
+'''
+Created on Oct 8, 2020
+@author: Inwoo Chung (gutomitai@gmail.com)
+'''
+
+import os
+import time
+import json
+
+import numpy as np
+import pandas as pd
+from tqdm import tqdm
+from sklearn.model_selection import StratifiedKFold
+
+import tensorflow as tf
+import tensorflow.keras as keras
+from tensorflow.keras.models import Model, load_model
+from tensorflow.keras.layers import Input, Conv1D, Dense, Concatenate, Dropout
+from tensorflow.keras.layers import LSTM, Bidirectional, BatchNormalization, LayerNormalization
+from tensorflow.python.keras.layers import Embedding, Layer
+from tensorflow.keras import optimizers
+from tensorflow.keras.callbacks import TensorBoard, ReduceLROnPlateau, LearningRateScheduler, ModelCheckpoint
+
+from ku.composite_layer import Transformer\
+    , SIMILARITY_TYPE_DIFF_ABS\
+    , SIMILARITY_TYPE_PLAIN\
+    , SIMILARITY_TYPE_SCALED\
+    , SIMILARITY_TYPE_GENERAL\
+    , SIMILARITY_TYPE_ADDITIVE
+
+from ku.composite_layer import DenseBatchNormalization
+from ku.backprop import make_decoder_from_encoder\
+    , make_autoencoder_from_encoder\
+    , make_autoencoder_with_sym_sc
+
+# os.environ["CUDA_DEVICE_ORDER"] = 'PCI_BUS_ID'
+# os.environ["CUDA_VISIBLE_DEVICES"] = '-1'
+
+# Constants.
+DEBUG = True
+
+MODE_TRAIN = 0
+MODE_VAL = 1
+
+CV_TYPE_TRAIN_VAL_SPLIT = 'train_val_split'
+CV_TYPE_K_FOLD = 'k_fold'
+
+epsilon = 1e-7
+
+def MoA_loss(W, ls=0.2):
+    def _MoA_loss(y_true, y_pred):
+        y_pred = tf.maximum(tf.minimum(y_pred, 1.0 - 1e-15), 1e-15)
+        y_true = tf.cast(y_true, dtype=tf.float32)
+        pos_mask = y_true
+        neg_mask = 1.0 - y_true
+
+        # Label smoothing.
+        y_true = pos_mask * y_true * (1.0 - ls / 2.0) + neg_mask * (y_true + ls / 2.0)
+
+        '''
+        pos_log_loss = pos_mask * W[:, :, 0] * tf.sqrt(tf.square(y_true - y_pred))
+        pos_log_loss_mean = tf.reduce_mean(pos_log_loss, axis=0) #?
+        pos_loss = 1.0 * tf.reduce_mean(pos_log_loss_mean, axis=0)
+
+        neg_log_loss = neg_mask * W[:, :, 1] * tf.sqrt(tf.square(y_true - y_pred))
+        neg_log_loss_mean = tf.reduce_mean(neg_log_loss, axis=0) #?
+        neg_loss = 1.0 * tf.reduce_mean(neg_log_loss_mean, axis=0)
+
+        loss = pos_loss + neg_loss
+        '''
+
+        #loss = tf.reduce_mean(tf.sqrt(tf.square(y_true - y_pred)))
+        #loss = tf.losses.binary_crossentropy(y_true, y_pred)
+        #log_loss_mean = tf.reduce_mean(log_loss, axis=0) #?
+        #loss = tf.reduce_mean(log_loss_mean, axis=0)
+
+        log_loss = -1.0 * (
+                    y_true * tf.math.log(y_pred + epsilon) + (1.0 - y_true) * tf.math.log(1.0 - y_pred + epsilon))
+        log_loss_mean = tf.reduce_mean(log_loss, axis=0)  # ?
+        loss = tf.reduce_mean(log_loss_mean, axis=0)
+
+        return loss
+    return _MoA_loss
+
+
+def MoA_metric(y_true, y_pred):
+    y_pred = tf.maximum(tf.minimum(y_pred, 1.0 - 1e-15), 1e-15)
+    y_true = tf.cast(y_true, dtype=tf.float32)
+
+    log_loss = -1.0 * (y_true * tf.math.log(y_pred + epsilon) + (1.0 - y_true) * tf.math.log(1.0 - y_pred + epsilon))
+    log_loss_mean = tf.reduce_mean(log_loss, axis=0) #?
+    loss = tf.reduce_mean(log_loss_mean, axis=0)
+    return loss
+
+MoA_metric.__name__ = 'MoA_metric'
+
+class _MoAPredictor(Layer):
+    def __init__(self, conf, **kwargs):
+        super(_MoAPredictor, self).__init__(**kwargs)
+
+        # Initialize.
+        self.conf = conf
+        self.hps = self.conf['hps']
+        self.nn_arch = self.conf['nn_arch']
+
+        # Design layers.
+        # First layers.
+        self.layer_normalization_0_1 = LayerNormalization()
+        self.layer_normalization_0_2 = LayerNormalization()
+        self.layer_normalization_0_3 = LayerNormalization()
+
+        # Autoencoder for gene expression.
+        input_gene_exp_1 = Input(shape=(self.nn_arch['num_gene_exp'],))
+
+        dense_1_1 = Dense(self.nn_arch['dense_1_1_d'], activation='swish')
+        batch_normalization_1_1 = BatchNormalization()
+        dense_batch_normalization_1_1 = DenseBatchNormalization(dense_1_1, batch_normalization_1_1)
+
+        dense_1_2 = Dense(self.nn_arch['dense_1_2_d'], activation='swish')
+        batch_normalization_1_2 = BatchNormalization()
+        dense_batch_normalization_1_2 = DenseBatchNormalization(dense_1_2, batch_normalization_1_2)
+
+        dense_1_3 = Dense(self.nn_arch['dense_1_3_d'], activation='swish')
+        batch_normalization_1_3 = BatchNormalization()
+        dense_batch_normalization_1_3 = DenseBatchNormalization(dense_1_3, batch_normalization_1_3)
+
+        dense_1_4 = Dense(self.nn_arch['dense_1_4_d'], activation='swish')
+        batch_normalization_1_4 = BatchNormalization()
+        dense_batch_normalization_1_4 = DenseBatchNormalization(dense_1_4, batch_normalization_1_4)
+
+        self.encoder_gene_exp_1 = keras.Sequential([input_gene_exp_1
+                                                    , dense_batch_normalization_1_1
+                                                    , dense_batch_normalization_1_2
+                                                    , dense_batch_normalization_1_3
+                                                    , dense_batch_normalization_1_4])
+        self.decoder_gene_exp_1 = make_decoder_from_encoder(self.encoder_gene_exp_1)
+
+        # Transformer for gene expression.
+        self.transformer_gene_exps = []
+
+        for i in range(self.nn_arch['num_transformer']):
+            self.transformer_gene_exps.append(Transformer(1
+                                                , 1
+                                                , dropout_rate=self.nn_arch['dropout_rate']
+                                                , similarity_type=self.nn_arch['similarity_type']
+                                                , layer_norm_f=False))
+
+        # Autoencoder for cell type.
+        input_gene_exp_2 = Input(shape=(self.nn_arch['num_cell_type'],))
+
+        dense_2_1 = Dense(self.nn_arch['dense_2_1_d'], activation='swish')
+        batch_normalization_2_1 = BatchNormalization()
+        dense_batch_normalization_2_1 = DenseBatchNormalization(dense_2_1, batch_normalization_2_1)
+
+        dense_2_2 = Dense(self.nn_arch['dense_2_2_d'], activation='swish')
+        batch_normalization_2_2 = BatchNormalization()
+        dense_batch_normalization_2_2 = DenseBatchNormalization(dense_2_2, batch_normalization_2_2)
+
+        dense_2_3 = Dense(self.nn_arch['dense_2_3_d'], activation='swish')
+        batch_normalization_2_3 = BatchNormalization()
+        dense_batch_normalization_2_3 = DenseBatchNormalization(dense_2_3, batch_normalization_2_3)
+
+        self.encoder_cell_type_2 = keras.Sequential([input_gene_exp_2
+                                                    , dense_batch_normalization_2_1
+                                                    , dense_batch_normalization_2_2
+                                                    , dense_batch_normalization_2_3])
+        self.decoder_cell_type_2 = make_decoder_from_encoder(self.encoder_cell_type_2)
+        self.dropout_2 = Dropout(self.nn_arch['dropout_rate'])
+
+        # Skip-connection autoencoder layer.
+        self.sc_aes = []
+        self.dropout_3 = Dropout(self.nn_arch['dropout_rate'])
+
+        for i in range(self.nn_arch['num_sc_ae']):
+            input_sk_ae_3 = Input(shape=(self.nn_arch['d_hidden'],))
+
+            dense_3_1 = Dense(self.nn_arch['dense_3_1_d'], activation='swish')
+            batch_normalization_3_1 = BatchNormalization()
+            dense_batch_normalization_3_1 = DenseBatchNormalization(dense_3_1, batch_normalization_3_1)
+
+            dense_3_2 = Dense(self.nn_arch['dense_3_2_d'], activation='swish')
+            batch_normalization_3_2 = BatchNormalization()
+            dense_batch_normalization_3_2 = DenseBatchNormalization(dense_3_2, batch_normalization_3_2)
+
+            dense_3_3 = Dense(self.nn_arch['dense_3_3_d'], activation='swish')
+            batch_normalization_3_3 = BatchNormalization()
+            dense_batch_normalization_3_3 = DenseBatchNormalization(dense_3_3, batch_normalization_3_3)
+
+            dense_3_4 = Dense(self.nn_arch['dense_3_4_d'], activation='swish')
+            batch_normalization_3_4 = BatchNormalization()
+            dense_batch_normalization_3_4 = DenseBatchNormalization(dense_3_4, batch_normalization_3_4)
+
+            sc_encoder_3 = keras.Sequential([input_sk_ae_3
+                                                        , dense_batch_normalization_3_1
+                                                        , dense_batch_normalization_3_2
+                                                        , dense_batch_normalization_3_3
+                                                        , dense_batch_normalization_3_4])
+            sc_autoencoder_3 = make_autoencoder_from_encoder(sc_encoder_3)
+            self.sc_aes.append(make_autoencoder_with_sym_sc(sc_autoencoder_3))
+
+        # Final layers.
+        self.dense_4_1 = Dense(self.nn_arch['dense_4_1_d'], activation='swish')
+        self.dense_4_2 = Dense(self.nn_arch['dense_4_2_d'], activation='swish')
+        self.dense_4_3 = Dense(self.nn_arch['dense_4_3_d'], activation='swish')
+        self.dense_4_4 = Dense(self.nn_arch['num_moa_annotation'], activation='sigmoid') #?
+
+    def call(self, inputs):
+        t = inputs[0]
+        g = inputs[1]
+        c = inputs[2]
+
+        # First layers.
+        t = self.layer_normalization_0_1(t)
+        g = self.layer_normalization_0_2(g)
+        c = self.layer_normalization_0_3(c)
+
+        # Gene expression.
+        g_e = self.encoder_gene_exp_1(g)
+        x_g = self.decoder_gene_exp_1(g_e)
+        x_g = tf.expand_dims(x_g, axis=-1)
+        for i in range(self.nn_arch['num_transformer']):
+            x_g = self.transformer_gene_exps[i]([x_g, x_g]) #?
+        x_g = tf.squeeze(x_g, axis=-1)
+
+        # Cell type.
+        c_e = self.encoder_cell_type_2(c)
+        x_c = self.decoder_cell_type_2(c_e)
+        x_c = self.dropout_2(x_c)
+
+        # Skip-connection autoencoder and final layers.
+        x = tf.concat([t, g_e, c_e], axis=-1)
+        for i in range(self.nn_arch['num_sc_ae']):
+            x = self.sc_aes[i](x)
+            x = self.dropout_3(x)
+
+        # Final layers.
+        x = self.dense_4_1(x)
+        x = self.dense_4_2(x)
+        x = self.dense_4_3(x)
+        x = self.dense_4_4(x)
+        outputs = [x_g, x_c, x]
+
+        return outputs
+
+    def get_config(self):
+        """Get configuration."""
+        config = {'conf': self.conf}
+        base_config = super(_MoAPredictor, self).get_config()
+        return dict(list(base_config.items()) + list(config.items()))
+
+
+class MoAPredictor(object):
+    """MoA predictor."""
+
+    # Constants.
+    MODEL_PATH = 'MoA_predictor'
+    OUTPUT_FILE_NAME = 'submission.csv'
+    EVALUATION_FILE_NAME = 'eval.csv'
+
+    def __init__(self, conf):
+        """
+        Parameters
+        ----------
+        conf: Dictionary
+            Configuration dictionary.
+        """
+        # Initialize.
+        self.conf = conf
+        self.raw_data_path = self.conf['raw_data_path']
+        self.hps = self.conf['hps']
+        self.nn_arch = self.conf['nn_arch']
+        self.model_loading = self.conf['model_loading']
+
+        # Create weight for classification imbalance.
+        W = self._create_W()
+
+        # with tpu_strategy.scope():
+        if self.conf['cv_type'] == CV_TYPE_TRAIN_VAL_SPLIT:
+            if self.model_loading:
+                self.model = load_model(self.MODEL_PATH + '.h5'
+                                            , custom_objects={'Transformer': Transformer
+                                            , 'MoA_loss': MoA_loss
+                                            , 'MoA_metric': MoA_metric
+                                            , '_MoAPredictor': _MoAPredictor}
+                                        , compile=False)
+                opt = optimizers.Adam(lr=self.hps['lr']
+                                      , beta_1=self.hps['beta_1']
+                                      , beta_2=self.hps['beta_2']
+                                      , decay=self.hps['decay'])
+                self.model.compile(optimizer=opt
+                              , loss=['mse', 'mse', MoA_loss(W, self.hps['ls'])]
+                              , loss_weights=self.hps['loss_weights']
+                              , metrics=[['mse'], ['mse'], [MoA_metric]]
+                              , run_eagerly=False)
+            else:
+                # Design the MoA prediction model.
+                # Input.
+                input_t = Input(shape=(self.nn_arch['treatment_onehot_d'],))
+                input_g = Input(shape=(self.nn_arch['num_gene_exp'],))
+                input_c = Input(shape=(self.nn_arch['num_cell_type'],))
+
+                outputs = _MoAPredictor(self.conf, name='moap')([input_t, input_g, input_c])
+
+                opt = optimizers.Adam(lr=self.hps['lr']
+                                      , beta_1=self.hps['beta_1']
+                                      , beta_2=self.hps['beta_2']
+                                      , decay=self.hps['decay'])
+
+                self.model = Model(inputs=[input_t, input_g, input_c], outputs=outputs)
+                self.model.compile(optimizer=opt
+                              , loss=['mse', 'mse', MoA_loss(W, self.hps['ls'])]
+                              , loss_weights=self.hps['loss_weights']
+                              , metrics=[['mse'], ['mse'], [MoA_metric]]
+                              , run_eagerly=False)
+                self.model.summary()
+        elif self.conf['cv_type'] == CV_TYPE_K_FOLD:
+            self.k_fold_models = []
+
+            if self.model_loading:
+                opt = optimizers.Adam(lr=self.hps['lr']
+                                      , beta_1=self.hps['beta_1']
+                                      , beta_2=self.hps['beta_2']
+                                      , decay=self.hps['decay'])
+
+                # load models for K-fold.
+                for i in range(self.nn_arch['k_fold']):
+                    self.k_fold_models.append(load_model(self.MODEL_PATH + '_' + str(i) + '.h5'
+                                            , custom_objects={'Transformer': Transformer
+                                            , 'MoA_loss': MoA_loss
+                                            , 'MoA_metric': MoA_metric
+                                            , '_MoAPredictor': _MoAPredictor}))
+                    self.k_fold_models[i].compile(optimizer=opt
+                                       , loss=['mse', 'mse', MoA_loss(W, self.hps['ls'])]
+                                       , loss_weights=self.hps['loss_weights']
+                                       , metrics=[['mse'], ['mse'], [MoA_metric]]
+                                       , run_eagerly=False)
+            else:
+                # Create models for K-fold.
+                for i in range(self.nn_arch['k_fold']):
+                    # Design the MoA prediction model.
+                    # Input.
+                    input_t = Input(shape=(self.nn_arch['treatment_onehot_d'],))
+                    input_g = Input(shape=(self.nn_arch['num_gene_exp'],))
+                    input_c = Input(shape=(self.nn_arch['num_cell_type'],))
+
+                    outputs = _MoAPredictor(self.conf)([input_t, input_g, input_c])
+
+                    opt = optimizers.Adam(lr=self.hps['lr']
+                                          , beta_1=self.hps['beta_1']
+                                          , beta_2=self.hps['beta_2']
+                                          , decay=self.hps['decay'])
+
+                    model = Model(inputs=[input_t, input_g, input_c], outputs=outputs)
+                    model.compile(optimizer=opt
+                                  , loss=['mse', 'mse', MoA_loss(W)]
+                                  , loss_weights=self.hps['loss_weights']
+                                  , metrics=[['mse'], ['mse'], [MoA_metric]]
+                                  , run_eagerly=False)
+                    model.summary()
+
+                    self.k_fold_models.append(model)
+        else:
+            raise ValueError('cv_type is not valid.')
+
+        # Create dataset.
+        self._create_dataset()
+
+    def _create_dataset(self):
+        input_df = pd.read_csv(os.path.join(self.raw_data_path, 'train_features.csv')).iloc[:1024]
+        input_df.cp_type = input_df.cp_type.astype('category')
+        input_df.cp_type = input_df.cp_type.cat.rename_categories(range(len(input_df.cp_type.cat.categories)))
+        input_df.cp_time = input_df.cp_time.astype('category')
+        input_df.cp_time = input_df.cp_time.cat.rename_categories(range(len(input_df.cp_time.cat.categories)))
+        input_df.cp_dose = input_df.cp_dose.astype('category')
+        input_df.cp_dose = input_df.cp_dose.cat.rename_categories(range(len(input_df.cp_dose.cat.categories)))
+
+        target_scored_df = pd.read_csv(os.path.join(self.raw_data_path, 'train_targets_scored.csv')).iloc[:1024]
+        del target_scored_df['sig_id']
+        target_scored_df.columns = range(len(target_scored_df.columns))
+
+        def make_input_features(inputs):
+            # Treatment.
+            cp_type = inputs['cp_type']
+            cp_time = inputs['cp_time']
+            cp_dose = inputs['cp_dose']
+
+            cp_type_onehot = tf.one_hot(cp_type, 2)
+            cp_time_onehot = tf.one_hot(cp_time, 3)
+            cp_dose_onehot = tf.one_hot(cp_dose, 2)
+
+            treatment_onehot = tf.concat([cp_type_onehot, cp_time_onehot, cp_dose_onehot], axis=-1)
+
+            # Gene expression.
+            gene_exps = [inputs['g-' + str(v)] for v in range(self.nn_arch['num_gene_exp'])]
+            gene_exps = tf.stack(gene_exps, axis=0)
+
+            # Cell viability.
+            cell_vs = [inputs['c-' + str(v)] for v in range(self.nn_arch['num_cell_type'])]
+            cell_vs = tf.stack(cell_vs, axis=0)
+
+            return (treatment_onehot, gene_exps, cell_vs)
+
+        def make_a_target_features(inputs):
+            # Gene expression.
+            gene_exps = [inputs['g-' + str(v)] for v in range(self.nn_arch['num_gene_exp'])]
+            gene_exps = tf.stack(gene_exps, axis=0)
+
+            # Cell viability.
+            cell_vs = [inputs['c-' + str(v)] for v in range(self.nn_arch['num_cell_type'])]
+            cell_vs = tf.stack(cell_vs, axis=0)
+
+            return gene_exps, cell_vs
+
+        def make_target_features(inputs):
+            # MoA annotations' values.
+            MoA_values = [inputs[v] for v in range(self.nn_arch['num_moa_annotation'])]
+            MoA_values = tf.stack(MoA_values, axis=0)
+
+            return MoA_values
+
+        def divide_inputs(input1, input2):
+            return input1[0], input1[1], input2
+
+        if self.conf['cv_type'] == CV_TYPE_TRAIN_VAL_SPLIT:
+            train_val_index = np.arange(len(input_df))
+            np.random.shuffle(train_val_index)
+            num_val = int(self.conf['val_ratio'] * len(input_df))
+            num_tr = len(input_df) - num_val
+            train_index = train_val_index[:num_tr]
+            val_index = train_val_index[num_tr:]
+            self.train_index = train_index
+            self.val_index = val_index
+
+            # Training dataset.
+            input_dataset = tf.data.Dataset.from_tensor_slices(input_df.iloc[train_index].to_dict('list'))
+            input_dataset = input_dataset.map(make_input_features)
+
+            a_target_dataset = tf.data.Dataset.from_tensor_slices(input_df.iloc[train_index].to_dict('list'))
+            a_target_dataset = a_target_dataset.map(make_a_target_features)
+
+            target_dataset = tf.data.Dataset.from_tensor_slices(target_scored_df.iloc[train_index].to_dict('list'))
+            target_dataset = target_dataset.map(make_target_features)
+
+            f_target_dataset = tf.data.Dataset.zip((a_target_dataset, target_dataset)).map(divide_inputs)
+
+            # Inputs and targets.
+            tr_dataset = tf.data.Dataset.zip((input_dataset, f_target_dataset))
+            tr_dataset = tr_dataset.shuffle(buffer_size=self.hps['batch_size'] * 5
+                                            , reshuffle_each_iteration=True).repeat().batch(self.hps['batch_size'])
+            self.step = len(input_df.iloc[train_index]) // self.hps['batch_size']
+
+            # Validation dataset.
+            input_dataset = tf.data.Dataset.from_tensor_slices(input_df.iloc[val_index].to_dict('list'))
+            input_dataset = input_dataset.map(make_input_features)
+
+            a_target_dataset = tf.data.Dataset.from_tensor_slices(input_df.iloc[val_index].to_dict('list'))
+            a_target_dataset = a_target_dataset.map(make_a_target_features)
+
+            target_dataset = tf.data.Dataset.from_tensor_slices(target_scored_df.iloc[val_index].to_dict('list'))
+            target_dataset = target_dataset.map(make_target_features)
+
+            f_target_dataset = tf.data.Dataset.zip((a_target_dataset, target_dataset)).map(divide_inputs)
+
+            # Inputs and targets.
+            val_dataset = tf.data.Dataset.zip((input_dataset, f_target_dataset))
+            val_dataset = val_dataset.batch(self.hps['batch_size'])
+
+            self.trval_dataset = (tr_dataset, val_dataset)
+        elif self.conf['cv_type'] == CV_TYPE_K_FOLD:
+            stratified_kfold = StratifiedKFold(n_splits=self.nn_arch['k_fold'])
+            # group_kfold = GroupKFold(n_splits=self.nn_arch['k_fold'])
+            self.k_fold_trval_datasets = []
+
+            for train_index, val_index in stratified_kfold.split(input_df, input_df.cp_type):
+                # Training dataset.
+                input_dataset = tf.data.Dataset.from_tensor_slices(input_df.iloc[train_index].to_dict('list'))
+                input_dataset = input_dataset.map(make_input_features)
+
+                a_target_dataset = tf.data.Dataset.from_tensor_slices(input_df.iloc[train_index].to_dict('list'))
+                a_target_dataset = a_target_dataset.map(make_a_target_features)
+
+                target_dataset = tf.data.Dataset.from_tensor_slices(target_scored_df.iloc[train_index].to_dict('list'))
+                target_dataset = target_dataset.map(make_target_features)
+
+                f_target_dataset = tf.data.Dataset.zip((a_target_dataset, target_dataset)).map(divide_inputs)
+
+                # Inputs and targets.
+                tr_dataset = tf.data.Dataset.zip((input_dataset, f_target_dataset))
+                tr_dataset = tr_dataset.shuffle(buffer_size=self.hps['batch_size'] * 5
+                                                , reshuffle_each_iteration=True).repeat().batch(self.hps['batch_size'])
+                self.step = len(input_df.iloc[train_index]) // self.hps['batch_size']
+
+                # Validation dataset.
+                input_dataset = tf.data.Dataset.from_tensor_slices(input_df.iloc[val_index].to_dict('list'))
+                input_dataset = input_dataset.map(make_input_features)
+
+                a_target_dataset = tf.data.Dataset.from_tensor_slices(input_df.iloc[val_index].to_dict('list'))
+                a_target_dataset = a_target_dataset.map(make_a_target_features)
+
+                target_dataset = tf.data.Dataset.from_tensor_slices(target_scored_df.iloc[val_index].to_dict('list'))
+                target_dataset = target_dataset.map(make_target_features)
+
+                f_target_dataset = tf.data.Dataset.zip((a_target_dataset, target_dataset)).map(divide_inputs)
+
+                # Inputs and targets.
+                val_dataset = tf.data.Dataset.zip((input_dataset, f_target_dataset))
+                val_dataset = val_dataset.batch(self.hps['batch_size'])
+
+                self.k_fold_trval_datasets.append((tr_dataset, val_dataset))
+        else:
+            raise ValueError('cv_type is not valid.')
+
+    def _create_W(self):
+        target_scored_df = pd.read_csv(os.path.join(self.raw_data_path, 'train_targets_scored.csv'))
+        del target_scored_df['sig_id']
+
+        weights = []
+        for c in target_scored_df.columns:
+            s = target_scored_df[c]
+            s = s.value_counts()
+            s = s / s.sum()
+            weights.append(s.values)
+
+        weight = np.expand_dims(np.array(weights), axis=0)
+
+        return weight
+
+    def train(self):
+        """Train."""
+        reduce_lr = ReduceLROnPlateau(monitor='val_loss'
+                                      , factor=self.hps['reduce_lr_factor']
+                                      , patience=2
+                                      , min_lr=1.e-8
+                                      , verbose=1)
+        tensorboard = TensorBoard(histogram_freq=1
+                                  , write_graph=True
+                                  , write_images=True
+                                  , update_freq='epoch')
+
+        '''
+        def schedule_lr(e_i):
+            self.hps['lr'] = self.hps['reduce_lr_factor'] * self.hps['lr']
+            return self.hps['lr']
+
+        lr_scheduler = LearningRateScheduler(schedule_lr, verbose=1)
+        '''
+
+        if self.conf['cv_type'] == CV_TYPE_TRAIN_VAL_SPLIT:
+            model_check_point = ModelCheckpoint(self.MODEL_PATH + '.h5'
+                                                , monitor='val_loss'
+                                                , verbose=1
+                                                , save_best_only=True)
+
+            self.model.fit_generator(self.trval_dataset[0]
+                                                , steps_per_epoch=self.step
+                                                , epochs=self.hps['epochs']
+                                                , verbose=1
+                                                , max_queue_size=80
+                                                , workers=4
+                                                , use_multiprocessing=False
+                                                , callbacks=[model_check_point]  # , reduce_lr, tensorboard]
+                                                , validation_data=self.trval_dataset[1]
+                                                , validation_freq=1
+                                                , shuffle=True)
+        elif self.conf['cv_type'] == CV_TYPE_K_FOLD:
+            for i in range(self.nn_arch['k_fold']):
+                model_check_point = ModelCheckpoint(self.MODEL_PATH + '_' + str(i) + '.h5'
+                                                    , monitor='val_loss'
+                                                    , verbose=1
+                                                    , save_best_only=True)
+
+                self.k_fold_models[i].fit_generator(self.k_fold_trval_datasets[i][0]
+                                                    , steps_per_epoch=self.step
+                                                    , epochs=self.hps['epochs']
+                                                    , verbose=1
+                                                    , max_queue_size=80
+                                                    , workers=4
+                                                    , use_multiprocessing=False
+                                                    , callbacks=[model_check_point]  # , reduce_lr, tensorboard]
+                                                    , validation_data=self.k_fold_trval_datasets[i][1]
+                                                    , validation_freq=1
+                                                    , shuffle=True)
+        else:
+            raise ValueError('cv_type is not valid.')
+
+        #print('Save the model.')
+        #self.model.save(self.MODEL_PATH, save_format='h5')
+        # self.model.save(self.MODEL_PATH, save_format='tf')
+
+    def evaluate(self):
+        """Evaluate."""
+        assert self.conf['cv_type'] == CV_TYPE_TRAIN_VAL_SPLIT
+
+        input_df = pd.read_csv(os.path.join(self.raw_data_path, 'train_features.csv')).iloc[:1024]
+        input_df.cp_type = input_df.cp_type.astype('category')
+        input_df.cp_type = input_df.cp_type.cat.rename_categories(range(len(input_df.cp_type.cat.categories)))
+        input_df.cp_time = input_df.cp_time.astype('category')
+        input_df.cp_time = input_df.cp_time.cat.rename_categories(range(len(input_df.cp_time.cat.categories)))
+        input_df.cp_dose = input_df.cp_dose.astype('category')
+        input_df.cp_dose = input_df.cp_dose.cat.rename_categories(range(len(input_df.cp_dose.cat.categories)))
+
+        target_scored_df = pd.read_csv(os.path.join(self.raw_data_path, 'train_targets_scored.csv')).iloc[:1024]
+        target_scored_df = target_scored_df.iloc[self.val_index]
+        MoA_annots = target_scored_df.columns[1:]
+
+        def make_input_features(inputs):
+            # Treatment.
+            cp_type = inputs['cp_type']
+            cp_time = inputs['cp_time']
+            cp_dose = inputs['cp_dose']
+
+            cp_type_onehot = tf.one_hot(cp_type, 2)
+            cp_time_onehot = tf.one_hot(cp_time, 3)
+            cp_dose_onehot = tf.one_hot(cp_dose, 2)
+
+            treatment_onehot = tf.concat([cp_type_onehot, cp_time_onehot, cp_dose_onehot], axis=-1)
+
+            # Gene expression.
+            gene_exps = [inputs['g-' + str(v)] for v in range(self.nn_arch['num_gene_exp'])]
+            gene_exps = tf.stack(gene_exps, axis=0)
+
+            # Cell viability.
+            cell_vs = [inputs['c-' + str(v)] for v in range(self.nn_arch['num_cell_type'])]
+            cell_vs = tf.stack(cell_vs, axis=0)
+
+            return (treatment_onehot, gene_exps, cell_vs)
+
+        # Validation dataset.
+        val_dataset = tf.data.Dataset.from_tensor_slices(input_df.iloc[self.val_index].to_dict('list'))
+        val_dataset = val_dataset.map(make_input_features)
+
+        val_iter = val_dataset.as_numpy_iterator()
+
+        # Predict MoAs.
+        sig_id_list = []
+        MoAs = [[] for _ in range(len(MoA_annots))]
+
+        for i, d in tqdm(enumerate(val_iter)):
+            t, g, c = d
+            id = target_scored_df['sig_id'].iloc[i]
+            t = np.expand_dims(t, axis=0)
+            g = np.expand_dims(g, axis=0)
+            c = np.expand_dims(c, axis=0)
+
+            if self.conf['cv_type'] == CV_TYPE_TRAIN_VAL_SPLIT:
+                _, _, result = self.model.layers[-1]([t, g, c])  # self.model.predict([t, g, c])
+                result = np.squeeze(result, axis=0)
+
+                for i, MoA in enumerate(result):
+                    MoAs[i].append(MoA)
+            elif self.conf['cv_type'] == CV_TYPE_K_FOLD:
+                # Conduct ensemble prediction.
+                result_list = []
+
+                for i in range(self.nn_arch['k_fold']):
+                    _, _, result = self.k_fold_models[i].predict([t, g, c])
+                    result = np.squeeze(result, axis=0)
+                    result_list.append(result)
+
+                result_mean = np.asarray(result_list).mean(axis=0)
+
+                for i, MoA in enumerate(result_mean):
+                    MoAs[i].append(MoA)
+            else:
+                raise ValueError('cv_type is not valid.')
+
+            sig_id_list.append(id)
+
+
+        # Save the result.
+        result_dict = {'sig_id': sig_id_list}
+        for i, MoA_annot in enumerate(MoA_annots):
+            result_dict[MoA_annot] = MoAs[i]
+
+        submission_df = pd.DataFrame(result_dict)
+        submission_df.to_csv(self.OUTPUT_FILE_NAME, index=False)
+
+        target_scored_df.to_csv('gt.csv', index=False)
+
+    def test(self):
+        """Test."""
+
+        # Create the test dataset.
+        input_df = pd.read_csv(os.path.join(self.raw_data_path, 'test_features.csv'))
+        input_df.cp_type = input_df.cp_type.astype('category')
+        input_df.cp_type = input_df.cp_type.cat.rename_categories(range(len(input_df.cp_type.cat.categories)))
+        input_df.cp_time = input_df.cp_time.astype('category')
+        input_df.cp_time = input_df.cp_time.cat.rename_categories(range(len(input_df.cp_time.cat.categories)))
+        input_df.cp_dose = input_df.cp_dose.astype('category')
+        input_df.cp_dose = input_df.cp_dose.cat.rename_categories(range(len(input_df.cp_dose.cat.categories)))
+
+        target_scored_df = pd.read_csv(os.path.join(self.raw_data_path, 'train_targets_scored.csv'))
+        MoA_annots = target_scored_df.columns[1:]
+
+        def make_input_features(inputs):
+            # Treatment.
+            id = inputs['sig_id']
+            cp_type = inputs['cp_type']
+            cp_time = inputs['cp_time']
+            cp_dose = inputs['cp_dose']
+
+            cp_type_onehot = tf.one_hot(cp_type, 2)
+            cp_time_onehot = tf.one_hot(cp_time, 3)
+            cp_dose_onehot = tf.one_hot(cp_dose, 2)
+
+            treatment_onehot = tf.concat([cp_type_onehot, cp_time_onehot, cp_dose_onehot], axis=-1)
+
+            # Gene expression.
+            gene_exps = [inputs['g-' + str(v)] for v in range(self.nn_arch['num_gene_exp'])]
+            gene_exps = tf.stack(gene_exps, axis=0)
+
+            # Cell viability.
+            cell_vs = [inputs['c-' + str(v)] for v in range(self.nn_arch['num_cell_type'])]
+            cell_vs = tf.stack(cell_vs, axis=0)
+
+            return (id, treatment_onehot, gene_exps, cell_vs)
+
+        test_dataset = tf.data.Dataset.from_tensor_slices(input_df.to_dict('list'))
+        test_dataset = test_dataset.map(make_input_features)
+        test_iter = test_dataset.as_numpy_iterator()
+
+        # Predict MoAs.
+        sig_id_list = []
+        MoAs = [[] for _ in range(len(MoA_annots))]
+
+        for id, t, g, c in tqdm(test_iter):
+            id = id.decode('utf8') #?
+            t = np.expand_dims(t, axis=0)
+            g = np.expand_dims(g, axis=0)
+            c = np.expand_dims(c, axis=0)
+
+            if self.conf['cv_type'] == CV_TYPE_TRAIN_VAL_SPLIT:
+                _, _, result = self.model.layers[-1]([t, g, c]) #self.model.predict([t, g, c])
+                result = np.squeeze(result, axis=0)
+
+                for i, MoA in enumerate(result):
+                    MoAs[i].append(MoA)
+            elif self.conf['cv_type'] == CV_TYPE_K_FOLD:
+                # Conduct ensemble prediction.
+                result_list = []
+
+                for i in range(self.nn_arch['k_fold']):
+                    _, _, result = self.k_fold_models[i].predict([t, g, c])
+                    result = np.squeeze(result, axis=0)
+                    result_list.append(result)
+
+                result_mean = np.asarray(result_list).mean(axis=0)
+
+                for i, MoA in enumerate(result_mean):
+                    MoAs[i].append(MoA)
+            else:
+                raise ValueError('cv_type is not valid.')
+
+            sig_id_list.append(id)
+
+        # Save the result.
+        result_dict = {'sig_id': sig_id_list}
+        for i, MoA_annot in enumerate(MoA_annots):
+            result_dict[MoA_annot] = MoAs[i]
+
+        submission_df = pd.DataFrame(result_dict)
+        submission_df.to_csv(self.OUTPUT_FILE_NAME, index=False)
+
+
+def main():
+    """Main."""
+    np.random.seed(1024)
+    tf.random.set_seed(1024)
+
+    # Load configuration.
+    with open("MoA_pred_conf.json", 'r') as f:
+        conf = json.load(f)
+
+    if conf['mode'] == 'train':
+        # Train.
+        model = MoAPredictor(conf)
+
+        ts = time.time()
+        model.train()
+        te = time.time()
+
+        print('Elasped time: {0:f}s'.format(te - ts))
+    elif conf['mode'] == 'evaluate':
+        # Train.
+        model = MoAPredictor(conf)
+
+        ts = time.time()
+        model.evaluate()
+        te = time.time()
+
+        print('Elasped time: {0:f}s'.format(te - ts))
+    elif conf['mode'] == 'test':
+        model = MoAPredictor(conf)
+
+        ts = time.time()
+        model.test()
+        te = time.time()
+
+        print('Elasped time: {0:f}s'.format(te - ts))
+    else:
+        raise ValueError('Mode is not valid.')
+
+
+if __name__ == '__main__':
+    main()

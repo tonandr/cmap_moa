@@ -1,0 +1,51 @@
+{
+	"mode": "evaluate",
+	"raw_data_path": "D:\\PycharmProjects\\MoA\\resource\\lish-moa",
+	"model_loading": true,
+	"multi_gpu": false,
+	"num_gpus": 4,
+	"cv_type": "train_val_split",
+	"val_ratio": 0.1,
+
+	"hps": {
+		"lr": 0.0001,
+		"beta_1": 0.999,
+		"beta_2": 0.999,
+		"decay": 0.0,
+		"epochs": 12,
+		"batch_size": 16,
+		"reduce_lr_factor": 0.99,
+		"ls": 0.0,
+		"loss_weights": [1.0, 0.3, 100.0]
+	},
+
+	"nn_arch": {
+		"k_fold": 5,
+		"treatment_onehot_d": 7,
+        "num_gene_exp": 772,
+        "num_cell_type": 100,
+        "dense_1_1_d": 512,
+		"dense_1_2_d": 256,
+		"dense_1_3_d": 128,
+		"dense_1_4_d": 64,
+		"dense_2_1_d": 64,
+		"dense_2_2_d": 32,
+		"dense_2_3_d": 16,
+		"num_sc_ae": 0,
+		"dense_3_1_d": 87,
+		"dense_3_2_d": 96,
+		"dense_3_3_d": 72,
+		"dense_3_4_d": 64,
+		"d_hidden": 87,
+		"dense_4_1_d": 128,
+		"dense_4_2_d": 256,
+		"dense_4_3_d": 128,
+        "num_moa_annotation": 206,
+		"d_embed": 1,
+		"num_head": 1,
+		"num_transformer": 0,
+		"d_out" : 772,
+		"dropout_rate": 0.5,
+		"similarity_type": "diff_abs"
+	}
+}
