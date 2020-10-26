@@ -1,0 +1,33 @@
+{
+	"mode": "train",
+	"raw_data_path": "D:\\PycharmProjects\\MoA\\resource\\lish-moa",
+	"model_loading": false,
+	"multi_gpu": false,
+	"num_gpus": 4,
+	"cv_type": "train_val_split",
+	"val_ratio": 0.1,
+	"model_type": "gae",
+
+	"hps": {
+		"lr": 0.0001,
+		"beta_1": 0.999,
+		"beta_2": 0.999,
+		"decay": 0.0,
+		"epochs": 2,
+		"batch_size": 16,
+		"reduce_lr_factor": 0.99,
+		"loss_weights": [1.0, 1.0]
+	},
+
+	"nn_arch": {
+		"k_fold": 5,
+		"d_treatment_type": 1,
+		"num_treatment_type": 6,
+        "d_gene_exp": 772,
+        "d_cell_type": 100,
+		"n_node": 3,
+		"d_input_feature": 128,
+		"gcn_d_outs": [128, 128],
+        "d_moa": 608
+	}
+}
