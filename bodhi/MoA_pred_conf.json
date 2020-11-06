@@ -1,5 +1,5 @@
 {
-	"mode": "evaluate",
+	"mode": "test",
 	"raw_data_path": "D:\\PycharmProjects\\MoA\\resource\\lish-moa",
 	"model_loading": true,
 	"multi_gpu": false,
@@ -21,9 +21,11 @@
 
 	"nn_arch": {
 		"k_fold": 5,
-		"treatment_onehot_d": 7,
-        "num_gene_exp": 772,
-        "num_cell_type": 100,
+		"d_treatment_type": 1,
+		"num_treatment_type": 6,
+		"d_input_feature": 128,
+        "d_gene_exp": 772,
+        "d_cell_type": 100,
         "dense_1_1_d": 512,
 		"dense_1_2_d": 256,
 		"dense_1_3_d": 128,
@@ -46,6 +48,7 @@
 		"num_transformer": 0,
 		"d_out" : 772,
 		"dropout_rate": 0.5,
-		"similarity_type": "diff_abs"
+		"similarity_type": "diff_abs",
+		"additive_margin": 0.0209
 	}
 }

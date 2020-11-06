@@ -7,11 +7,13 @@ import os
 import time
 import json
 import copy
+from itertools import combinations
 
+from scipy.special import comb
 import numpy as np
 import pandas as pd
 from tqdm import tqdm
-from sklearn.model_selection import StratifiedKFold
+from sklearn.model_selection import KFold, StratifiedKFold
 
 import tensorflow as tf
 import tensorflow.keras as keras
@@ -53,11 +55,11 @@ CV_TYPE_K_FOLD = 'k_fold'
 
 epsilon = 1e-7
 
-A = np.array([[0.0, 0.0, 0.0], [1.0, 0.0, 1.0], [1.0, 1.0, 0.0]])
+A = np.array([[0.0, 1.0, 1.0], [1.0, 0.0, 1.0], [1.0, 1.0, 0.0]])
 
 
 def MoA_loss(y_true, y_pred):
-    loss = tf.reduce_mean(y_pred, axis=-1)
+    loss = tf.reduce_mean(y_pred)
     return loss
 
 
@@ -86,6 +88,25 @@ class CMAPFeatureGAE(Layer):
         gcn_d_outs_r.reverse()
 
         # Design layers.
+        # First layers.
+        self.embed_treatment_type_0 = Embedding(self.nn_arch['num_treatment_type']
+                                           , self.nn_arch['d_input_feature'])
+        self.dense_treatment_type_0 = Dense(self.nn_arch['d_input_feature']
+                                       , activation='relu')
+        #self.batch_normalization_0_1 = BatchNormalization()
+        self.dense_gene_exp_0 = Dense(self.nn_arch['d_input_feature']
+                                 , activation='relu')
+        #self.batch_normalization_0_2 = BatchNormalization()
+        self.dense_cell_type_0 = Dense(self.nn_arch['d_input_feature']
+                                  , activation='relu')
+        #self.batch_normalization_0_3 = BatchNormalization()
+
+        self.layer_normalization_0_1 = LayerNormalization()
+        self.layer_normalization_0_2 = LayerNormalization()
+        self.layer_normalization_0_3 = LayerNormalization()
+
+        self.concat_0 = Concatenate(axis=1)
+
         # GCN encoder.
         input_feature_1 = Input(shape=(self.nn_arch['n_node'], self.nn_arch['d_input_feature'])
                                  , dtype='float32', name='input_feature_1')
@@ -118,26 +139,52 @@ class CMAPFeatureGAE(Layer):
             x_2, A_2 = GraphConvolutionNetwork(self.nn_arch['n_node']
                                                , d_out
                                                , output_adjacency=True
-                                               , activation=keras.activations.relu)([x_2, A_2])
+                                               , activation='swish')([x_2, A_2])
 
         output_2 = [x_2, A_2]
 
         self.gcn_decoder_1 = Model(inputs=[input_feature_2, input_A_2], outputs=output_2)
 
     def call(self, inputs):
-        X = inputs[0]
-        A_ = inputs[1]
+        t = inputs[0]
+        g = inputs[1]
+        c = inputs[2]
+        A_ = inputs[3]
+
+        # First layer.
+        # X.
+        t = self.embed_treatment_type_0(t)
+        t = tf.reshape(t, (-1, self.nn_arch['d_input_feature']))
+        t = self.dense_treatment_type_0(t)
+        #t = self.batch_normalization_0_1(t)
+
+        g = self.dense_gene_exp_0(g)
+        #g = self.batch_normalization_0_2(g)
+
+        c = self.dense_cell_type_0(c)
+        #c = self.batch_normalization_0_3(c)
+
+        t = self.layer_normalization_0_1(t)
+        g = self.layer_normalization_0_2(g)
+        c = self.layer_normalization_0_3(c)
+
+        t = tf.expand_dims(t, axis=1)
+        g = tf.expand_dims(g, axis=1)
+        c = tf.expand_dims(c, axis=1)
+
+        X = self.concat_0([t, g, c])
 
         # GCN encoding layer.
         Z, _ = self.gcn_encoder_1([X, A_])
 
         # GCN decoding layer for graph structure.
-        A_h = tf.sigmoid(K.batch_dot(Z, tf.transpose(Z, perm=[0, 2, 1])))
+        #A_h = tf.sigmoid(K.batch_dot(Z, tf.transpose(Z, perm=[0, 2, 1])))
+        A_h = K.batch_dot(Z, tf.transpose(Z, perm=[0, 2, 1])) #+ 1e-15
 
         # GCN decoding layer for node feature.
         X_h, _ = self.gcn_decoder_1([Z, A_])
 
-        outputs = [X_h, A_h]
+        outputs = [X, X_h, A_h]
         return outputs
 
     def get_config(self):
@@ -160,31 +207,94 @@ class CMAPFeatureExtractor(Layer):
 
         # Design layers.
         # CMAPFeatureGAE.
-        self.gae_0 = CMAPFeatureGAE(self.conf, self.A)
+        self.gae_0 = CMAPFeatureGAE(self.conf)
 
     def call(self, inputs):
-        X_1 = inputs[0]
-        X_2 = inputs[1]
+        t_1 = inputs[0]
+        g_1 = inputs[1]
+        c_1 = inputs[2]
+        A_1 = inputs[3]
+
+        t_2 = inputs[4]
+        g_2 = inputs[5]
+        c_2 = inputs[6]
+        A_2 = inputs[7]
+
+        # First layer.
+        # X_1.
+        t_1 = self.gae_0.embed_treatment_type_0(t_1)
+        t_1 = tf.reshape(t_1, (-1, self.nn_arch['d_input_feature']))
+        t_1 = self.gae_0.dense_treatment_type_0(t_1)
+        #t_1 = self.batch_normalization_0_1(t_1)
+
+        g_1 = self.gae_0.dense_gene_exp_0(g_1)
+        #g_1 = self.batch_normalization_0_2(g_1)
+
+        c_1 = self.gae_0.dense_cell_type_0(c_1)
+        #c_1 = self.batch_normalization_0_3(c_1)
+
+        t_1 = self.gae_0.layer_normalization_0_1(t_1)
+        g_1 = self.gae_0.layer_normalization_0_2(g_1)
+        c_1 = self.gae_0.layer_normalization_0_3(c_1)
+
+        t_1 = tf.expand_dims(t_1, axis=1)
+        g_1 = tf.expand_dims(g_1, axis=1)
+        c_1 = tf.expand_dims(c_1, axis=1)
+
+        X_1 = self.gae_0.concat_0([t_1, g_1, c_1])
+
+        # X_2.
+        t_2 = self.gae_0.embed_treatment_type_0(t_2)
+        t_2 = tf.reshape(t_2, (-1, self.nn_arch['d_input_feature']))
+        t_2 = self.gae_0.dense_treatment_type_0(t_2)
+        #t_2 = self.batch_normalization_0_1(t_2)
+
+        g_2 = self.gae_0.dense_gene_exp_0(g_2)
+        #g_2 = self.batch_normalization_0_2(g_2)
+
+        c_2 = self.gae_0.dense_cell_type_0(c_2)
+        #c_2 = self.batch_normalization_0_3(c_2)
+
+        t_2 = self.gae_0.layer_normalization_0_1(t_2)
+        g_2 = self.gae_0.layer_normalization_0_2(g_2)
+        c_2 = self.gae_0.layer_normalization_0_3(c_2)
+
+        t_2 = tf.expand_dims(t_2, axis=1)
+        g_2 = tf.expand_dims(g_2, axis=1)
+        c_2 = tf.expand_dims(c_2, axis=1)
+
+        X_2 = self.gae_0.concat_0([t_2, g_2, c_2])
 
         # Get pair latent features.
-        Z_1 = self.gae_0.gcn_encoder_1(X_1)
-        Z_2 = self.gae_0.gcn_encoder_1(X_2)
+        Z_1, _ = self.gae_0.gcn_encoder_1([X_1, A_1])
+        Z_2, _ = self.gae_0.gcn_encoder_1([X_2, A_2])
 
-        Z_loss = tf.sqrt(tf.square(Z_1 - Z_2)) # Valid distance metric?
+        # Loss for intra-class.
+        Z_loss = tf.square(Z_1 - Z_2) # Valid distance metric?
 
         # Get pair A_hs and X_hs. Normalization?
-        X_h_1, A_h_1 = self.gae_0(X_1)
-        X_h_2, A_h_2 = self.gae_0(X_1)
+        t_1 = inputs[0]
+        g_1 = inputs[1]
+        c_1 = inputs[2]
+        A_1 = inputs[3]
 
-        X_1_loss = tf.sqrt(tf.square(X_1 - X_h_1))
-        X_2_loss = tf.sqrt(tf.square(X_2 - X_h_2))
+        t_2 = inputs[4]
+        g_2 = inputs[5]
+        c_2 = inputs[6]
+        A_2 = inputs[7]
+
+        X_1, X_h_1, A_h_1 = self.gae_0([t_1, g_1, c_1, A_1])
+        X_2, X_h_2, A_h_2 = self.gae_0([t_2, g_2, c_2, A_2])
+
+        X_1_loss = tf.square(X_1 - X_h_1)
+        X_2_loss = tf.square(X_2 - X_h_2)
         X_loss = (X_1_loss + X_2_loss) / 2.0
 
-        A_1_loss = tf.sqrt(tf.square(tf.cast(self.A, dtype=tf.float32) - A_h_1))
-        A_2_loss = tf.sqrt(tf.square(tf.cast(self.A, dtype=tf.float32) - A_h_2))
-        A_loss = (A_1_loss + A_2_loss) / 2.0
+        #A_1_loss = tf.sqrt(tf.square(tf.cast(self.A, dtype=tf.float32) - A_h_1))
+        #A_2_loss = tf.sqrt(tf.square(tf.cast(self.A, dtype=tf.float32) - A_h_2))
+        #A_loss = (A_1_loss + A_2_loss) / 2.0
 
-        outputs = [Z_loss, X_loss, A_loss]
+        outputs = [Z_loss, X_loss] #, A_loss]
 
         return outputs
 
@@ -226,6 +336,7 @@ class MoAPredictorGNN(object):
                     self.model = load_model(self.MODEL_PATH + '.h5'
                                                 , custom_objects={'MoA_loss': MoA_loss
                                                 , 'MoA_metric': MoA_metric
+                                                , 'CMAPFeatureGAE': CMAPFeatureGAE
                                                 , 'CMAPFeatureExtractor': CMAPFeatureExtractor}
                                             , compile=False)
                     opt = optimizers.Adam(lr=self.hps['lr']
@@ -242,68 +353,31 @@ class MoAPredictorGNN(object):
                     input_t_1 = Input(shape=(self.nn_arch['d_treatment_type'],), dtype='float32', name='input_t_1')
                     input_g_1 = Input(shape=(self.nn_arch['d_gene_exp'],), dtype='float32', name='input_g_1')
                     input_c_1 = Input(shape=(self.nn_arch['d_cell_type'],), dtype='float32', name='input_c_1')
+                    input_A_1 = Input(shape=(self.nn_arch['n_node'], self.nn_arch['n_node'])
+                                      , dtype='float32', name='input_A_1')
 
                     input_t_2 = Input(shape=(self.nn_arch['d_treatment_type'],), dtype='float32', name='input_t_2')
                     input_g_2 = Input(shape=(self.nn_arch['d_gene_exp'],), dtype='float32', name='input_g_2')
                     input_c_2 = Input(shape=(self.nn_arch['d_cell_type'],), dtype='float32', name='input_c_2')
-
-                    # First layers.
-                    embed_treatment_type_0 = Embedding(self.nn_arch['d_treatment_type']
-                                                            , self.nn_arch['d_input_feature'])
-                    dense_treatment_type_0 = Dense(self.nn_arch['d_input_feature']
-                                                        , activation='swish')
-                    dense_gene_exp_0 = Dense(self.nn_arch['d_input_feature']
-                                                  , activation='swish')
-                    dense_cell_type_0 = Dense(self.nn_arch['d_input_feature']
-                                                   , activation='swish')
-
-                    layer_normalization_0_1 = LayerNormalization()
-                    layer_normalization_0_2 = LayerNormalization()
-                    layer_normalization_0_3 = LayerNormalization()
-
-                    concat_0 = Concatenate(axis=1)
-
-                    # X_1.
-                    t_1 = embed_treatment_type_0(input_t_1)
-                    t_1 = dense_treatment_type_0(t_1)
-
-                    g_1 = dense_gene_exp_0(input_g_1)
-                    c_1 = dense_cell_type_0(input_c_1)
-
-                    t_1 = layer_normalization_0_1(t_1)
-                    g_1 = layer_normalization_0_2(g_1)
-                    c_1 = layer_normalization_0_3(c_1)
-
-                    X_1 = concat_0([t_1, g_1, c_1])
-
-                    # X_2.
-                    t_2 = embed_treatment_type_0(input_t_2)
-                    t_2 = dense_treatment_type_0(t_2)
-
-                    g_2 = dense_gene_exp_0(input_g_2)
-                    c_2 = dense_cell_type_0(input_c_2)
-
-                    t_2 = layer_normalization_0_1(t_2)
-                    g_2 = layer_normalization_0_2(g_2)
-                    c_2 = layer_normalization_0_3(c_2)
-
-                    X_2 = concat_0([t_2, g_2, c_2])
+                    input_A_2 = Input(shape=(self.nn_arch['n_node'], self.nn_arch['n_node'])
+                                      , dtype='float32', name='input_A_2')
 
                     # Feature extractor.
-                    outputs = CMAPFeatureExtractor(self.conf, A, name='extractor')([X_1, X_2])
+                    outputs = CMAPFeatureExtractor(self.conf, A, name='extractor')((input_t_1, input_g_1, input_c_1, input_A_1
+                                                                                       , input_t_2, input_g_2, input_c_2, input_A_2))
 
                     opt = optimizers.Adam(lr=self.hps['lr']
                                           , beta_1=self.hps['beta_1']
                                           , beta_2=self.hps['beta_2']
                                           , decay=self.hps['decay'])
 
-                    self.model = Model(inputs=[[input_t_1, input_g_1, input_c_1]
-                                        , [input_t_2, input_g_2, input_c_2]]
+                    self.model = Model(inputs=[input_t_1, input_g_1, input_c_1, input_A_1
+                                        , input_t_2, input_g_2, input_c_2, input_A_2]
                                        , outputs=outputs)
                     self.model.compile(optimizer=opt
                                   , loss=MoA_loss
                                   , loss_weights=self.hps['loss_weights']
-                                  , run_eagerly=False)
+                                  , run_eagerly=True)
                     self.model.summary()
             elif self.conf['cv_type'] == CV_TYPE_K_FOLD:
                 self.k_fold_models = []
@@ -319,82 +393,45 @@ class MoAPredictorGNN(object):
                         self.k_fold_models.append(load_model(self.MODEL_PATH + '_' + str(i) + '.h5'
                                                 , custom_objects={'MoA_loss': MoA_loss
                                                 , 'MoA_metric': MoA_metric
+                                                , 'CMAPFeatureGAE': CMAPFeatureGAE
                                                 , 'CMAPFeatureExtractor': CMAPFeatureExtractor}
                                             , compile=False))
                         self.k_fold_models[i].compile(optimizer=opt
                                            , loss=MoA_loss
                                            , loss_weights=self.hps['loss_weights']
-                                           , run_eagerly=False)
+                                           , run_eagerly=True)
                 else:
                     # Create models for K-fold.
+                    opt = optimizers.Adam(lr=self.hps['lr']
+                                          , beta_1=self.hps['beta_1']
+                                          , beta_2=self.hps['beta_2']
+                                          , decay=self.hps['decay'])
+
                     for i in range(self.nn_arch['k_fold']):
                         # Design the MoA prediction model.
-                        # Input.
                         input_t_1 = Input(shape=(self.nn_arch['d_treatment_type'],), dtype='float32', name='input_t_1')
                         input_g_1 = Input(shape=(self.nn_arch['d_gene_exp'],), dtype='float32', name='input_g_1')
                         input_c_1 = Input(shape=(self.nn_arch['d_cell_type'],), dtype='float32', name='input_c_1')
+                        input_A_1 = Input(shape=(self.nn_arch['n_node'], self.nn_arch['n_node'])
+                                          , dtype='float32', name='input_A_1')
 
                         input_t_2 = Input(shape=(self.nn_arch['d_treatment_type'],), dtype='float32', name='input_t_2')
                         input_g_2 = Input(shape=(self.nn_arch['d_gene_exp'],), dtype='float32', name='input_g_2')
                         input_c_2 = Input(shape=(self.nn_arch['d_cell_type'],), dtype='float32', name='input_c_2')
-
-                        # First layers.
-                        embed_treatment_type_0 = Embedding(self.nn_arch['d_treatment_type']
-                                                           , self.nn_arch['d_input_feature'])
-                        dense_treatment_type_0 = Dense(self.nn_arch['d_input_feature']
-                                                       , activation='swish')
-                        dense_gene_exp_0 = Dense(self.nn_arch['d_input_feature']
-                                                 , activation='swish')
-                        dense_cell_type_0 = Dense(self.nn_arch['d_input_feature']
-                                                  , activation='swish')
-
-                        layer_normalization_0_1 = LayerNormalization()
-                        layer_normalization_0_2 = LayerNormalization()
-                        layer_normalization_0_3 = LayerNormalization()
-
-                        concat_0 = Concatenate(axis=1)
-
-                        # X_1.
-                        t_1 = embed_treatment_type_0(input_t_1)
-                        t_1 = dense_treatment_type_0(t_1)
-
-                        g_1 = dense_gene_exp_0(input_g_1)
-                        c_1 = dense_cell_type_0(input_c_1)
-
-                        t_1 = layer_normalization_0_1(t_1)
-                        g_1 = layer_normalization_0_2(g_1)
-                        c_1 = layer_normalization_0_3(c_1)
-
-                        X_1 = concat_0([t_1, g_1, c_1])
-
-                        # X_2.
-                        t_2 = embed_treatment_type_0(input_t_2)
-                        t_2 = dense_treatment_type_0(t_2)
-
-                        g_2 = dense_gene_exp_0(input_g_2)
-                        c_2 = dense_cell_type_0(input_c_2)
-
-                        t_2 = layer_normalization_0_1(t_2)
-                        g_2 = layer_normalization_0_2(g_2)
-                        c_2 = layer_normalization_0_3(c_2)
-
-                        X_2 = concat_0([t_2, g_2, c_2])
+                        input_A_2 = Input(shape=(self.nn_arch['n_node'], self.nn_arch['n_node'])
+                                          , dtype='float32', name='input_A_2')
 
                         # Feature extractor.
-                        outputs = CMAPFeatureExtractor(self.conf, A, name='extractor')([X_1, X_2])
+                        outputs = CMAPFeatureExtractor(self.conf, A, name='extractor')([input_t_1, input_g_1, input_c_1, input_A_1
+                                        , input_t_2, input_g_2, input_c_2, input_A_2])
 
-                        opt = optimizers.Adam(lr=self.hps['lr']
-                                              , beta_1=self.hps['beta_1']
-                                              , beta_2=self.hps['beta_2']
-                                              , decay=self.hps['decay'])
-
-                        model = Model(inputs=[[input_t_1, input_g_1, input_c_1]
-                                        , [input_t_2, input_g_2, input_c_2]]
+                        model = Model(inputs=[input_t_1, input_g_1, input_c_1, input_A_1
+                                        , input_t_2, input_g_2, input_c_2, input_A_2]
                                            , outputs=outputs)
                         model.compile(optimizer=opt
                                            , loss=MoA_loss
                                            , loss_weights=self.hps['loss_weights']
-                                           , run_eagerly=False)
+                                           , run_eagerly=True)
                         model.summary()
 
                         self.k_fold_models.append(model)
@@ -405,6 +442,7 @@ class MoAPredictorGNN(object):
                 self.model = load_model(self.MODEL_GAE_PATH + '.h5'
                                             , custom_objects={'MoA_loss': MoA_loss
                                             , 'MoA_metric': MoA_metric
+                                            , 'CMAPFeatureGAE': CMAPFeatureGAE
                                             , 'CMAPFeatureExtractor': CMAPFeatureExtractor}
                                         , compile=False)
                 opt = optimizers.Adam(lr=self.hps['lr']
@@ -425,49 +463,16 @@ class MoAPredictorGNN(object):
                 input_A_1 = Input(shape=(self.nn_arch['n_node'], self.nn_arch['n_node'])
                                   , dtype='float32', name='input_A_1')
 
-                # First layers.
-                embed_treatment_type_0 = Embedding(self.nn_arch['num_treatment_type']
-                                                        , self.nn_arch['d_input_feature'])
-                dense_treatment_type_0 = Dense(self.nn_arch['d_input_feature']
-                                                    , activation='swish')
-                dense_gene_exp_0 = Dense(self.nn_arch['d_input_feature']
-                                              , activation='swish')
-                dense_cell_type_0 = Dense(self.nn_arch['d_input_feature']
-                                               , activation='swish')
-
-                layer_normalization_0_1 = LayerNormalization()
-                layer_normalization_0_2 = LayerNormalization()
-                layer_normalization_0_3 = LayerNormalization()
-
-                concat_0 = Concatenate(axis=1)
-
-                # X.
-                t_1 = embed_treatment_type_0(input_t_1)
-                t_1 = tf.reshape(t_1, (-1, self.nn_arch['d_input_feature']))
-                t_1 = dense_treatment_type_0(t_1)
-
-                g_1 = dense_gene_exp_0(input_g_1)
-                c_1 = dense_cell_type_0(input_c_1)
-
-                t_1 = layer_normalization_0_1(t_1)
-                g_1 = layer_normalization_0_2(g_1)
-                c_1 = layer_normalization_0_3(c_1)
-
-                t_1 = tf.expand_dims(t_1, axis=1)
-                g_1 = tf.expand_dims(g_1, axis=1)
-                c_1 = tf.expand_dims(c_1, axis=1)
-
-                X = concat_0([t_1, g_1, c_1])
 
                 # Feature extractor.
                 gae = CMAPFeatureGAE(self.conf, name='gae')
-                X_h, A_h = gae([X, input_A_1])
+                X, X_h = gae([input_t_1, input_g_1, input_c_1, input_A_1])
 
                 # Metric loss.
                 X_loss = tf.sqrt(tf.square(X_h - X))
-                A_loss = tf.sqrt(tf.square(A_h - tf.cast(A, dtype=tf.float32)))
+                #A_loss = tf.sqrt(tf.square(A_h - tf.cast(A, dtype=tf.float32)))
 
-                outputs = [X_loss, A_loss]
+                outputs = [X_loss] #, A_loss]
 
                 opt = optimizers.Adam(lr=self.hps['lr']
                                       , beta_1=self.hps['beta_1']
@@ -485,9 +490,14 @@ class MoAPredictorGNN(object):
             raise ValueError('model_type is not valid.')
 
         # Create dataset.
-        self._create_autoencoder_dataset()
+        if self.conf['model_type'] == MODEL_TYPE_GAE:
+            self._create_graph_autoencoder_dataset()
+        elif self.conf['model_type'] == MODEL_TYPE_EXTRACTOR:
+            self._create_extractor_dataset()
+        else:
+            raise ValueError('model_type is not valid.')
 
-    def _create_autoencoder_dataset(self):
+    def _create_graph_autoencoder_dataset(self):
         input_df = pd.read_csv(os.path.join(self.raw_data_path, 'train_features.csv')).iloc[:1024]
         input_df.cp_type = input_df.cp_type.astype('category')
         input_df.cp_type = input_df.cp_type.cat.rename_categories(range(len(input_df.cp_type.cat.categories)))
@@ -497,7 +507,13 @@ class MoAPredictorGNN(object):
         input_df.cp_dose = input_df.cp_dose.cat.rename_categories(range(len(input_df.cp_dose.cat.categories)))
 
         # Remove samples of ctl_vehicle.
-        input_df = input_df[input_df.cp_type == 1]
+        valid_indexes = input_df.cp_type == 1
+        input_df = input_df[valid_indexes]
+
+        target_scored_df = pd.read_csv(os.path.join(self.raw_data_path, 'train_targets_scored.csv')).iloc[:1024]
+        target_scored_df = target_scored_df[valid_indexes]
+        del target_scored_df['sig_id']
+        target_scored_df.columns = range(len(target_scored_df.columns))
 
         def make_input_features(inputs):
             # Treatment.
@@ -553,12 +569,12 @@ class MoAPredictorGNN(object):
         f_target_dataset = tf.data.Dataset.zip((dummy_target_dataset_1, dummy_target_dataset_2))
 
         # Inputs and targets.
-        val_dataset = tf.data.Dataset.zip((input_dataset, f_target_dataset))
+        val_dataset = tf.data.Dataset.zip((input_dataset, f_target_dataset)).batch(self.hps['batch_size'])
 
         self.trval_dataset_autoencoder = (tr_dataset, val_dataset)
 
-    def _create_intra_class_pair_dataset(self):
-        input_df = pd.read_csv(os.path.join(self.raw_data_path, 'train_features.csv')).iloc[:1024]
+    def _create_extractor_dataset(self):
+        input_df = pd.read_csv(os.path.join(self.raw_data_path, 'train_features.csv')) #.iloc[:1024]
         input_df.cp_type = input_df.cp_type.astype('category')
         input_df.cp_type = input_df.cp_type.cat.rename_categories(range(len(input_df.cp_type.cat.categories)))
         input_df.cp_time = input_df.cp_time.astype('category')
@@ -567,47 +583,161 @@ class MoAPredictorGNN(object):
         input_df.cp_dose = input_df.cp_dose.cat.rename_categories(range(len(input_df.cp_dose.cat.categories)))
 
         # Remove samples of ctl_vehicle.
-        input_df = input_df[input_df.cp_type == 1]
+        valid_indexes = input_df.cp_type == 1
+        input_df = input_df[valid_indexes]
 
-        def make_input_features(inputs):
+        target_scored_df = pd.read_csv(os.path.join(self.raw_data_path, 'train_targets_scored.csv')) #.iloc[:1024]
+        target_scored_df = target_scored_df[valid_indexes]
+
+        target_nonscored_df = pd.read_csv(os.path.join(self.raw_data_path, 'train_targets_nonscored.csv')) #.iloc[:1024]
+        target_nonscored_df = target_nonscored_df[valid_indexes]
+
+        target_df = pd.concat([target_scored_df, target_nonscored_df.iloc[:, 1:]], axis=1)
+        del target_df['sig_id']
+        target_df.columns = range(len(target_df.columns))
+
+        # Get same MoA pairs.
+        s_pairs = []
+        target_df_sum = target_df.sum()
+        n_ref = int(target_df_sum.mean())
+        n_samples = comb(n_ref, 2, exact=True)
+
+        for c in tqdm(target_df.columns):
+            series = target_df[c]
+            series = series[series == 1]
+            idxes = list(series.index)
+            if len(idxes) == 0:
+                continue
+            s_pair = np.random.choice(idxes, size=(n_samples, 2), replace=True)
+            s_pairs.append(s_pair)
+
+        s_pairs = np.concatenate(s_pairs, axis=0)
+
+        def _make_input_features(pair):
+            pair = pair.numpy()
+            idx_1 = pair[0]
+            idx_2 = pair[1]
+            input_1 = input_df.loc[idx_1]
+            input_2 = input_df.loc[idx_2]
+
             # Treatment.
-            cp_time = inputs['cp_time']
-            cp_dose = inputs['cp_dose']
+            cp_time_1 = input_1['cp_time']
+            cp_dose_1 = input_1['cp_dose']
 
-            treatment_type = cp_time * 2 + cp_dose
+            treatment_type_1 = cp_time_1 * 2 + cp_dose_1
 
             # Gene expression.
-            gene_exps = [inputs['g-' + str(v)] for v in range(self.nn_arch['num_gene_exp'])]
-            gene_exps = tf.stack(gene_exps, axis=0)
+            gene_exps_1 = input_1.iloc[4:(4 + self.nn_arch['d_gene_exp'])].values
 
             # Cell viability.
-            cell_vs = [inputs['c-' + str(v)] for v in range(self.nn_arch['num_cell_type'])]
-            cell_vs = tf.stack(cell_vs, axis=0)
+            cell_vs_1 = input_1.iloc[(4 + self.nn_arch['d_gene_exp']):].values
 
-            return (treatment_type, gene_exps, cell_vs)
+            # Adjacency matrix.
+            A_1 = A
+
+            # Treatment.
+            cp_time_2 = input_2['cp_time']
+            cp_dose_2 = input_2['cp_dose']
+
+            treatment_type_2 = cp_time_2 * 2 + cp_dose_2
+
+            # Gene expression.
+            gene_exps_2 = input_2.iloc[4:(4 + self.nn_arch['d_gene_exp'])].values
+
+            # Cell viability.
+            cell_vs_2 = input_2.iloc[(4 + self.nn_arch['d_gene_exp']):].values
+
+            # Adjacency matrix.
+            A_2 = A
+
+            return np.expand_dims(treatment_type_1, axis=-1) \
+                , gene_exps_1 \
+                , cell_vs_1 \
+                , A_1 \
+                , np.expand_dims(treatment_type_2, axis=-1) \
+                , gene_exps_2 \
+                , cell_vs_2 \
+                , A_2
+
+        def make_input_features(inputs):
+            t_1, g_1, c_1, A_1, t_2, g_2, c_2, A_2 = tf.py_function(_make_input_features, [inputs],
+                                                                    Tout=[tf.float32] * 8)
+            return t_1, g_1, c_1, A_1, t_2, g_2, c_2, A_2
 
         if self.conf['cv_type'] == CV_TYPE_TRAIN_VAL_SPLIT:
-            train_val_index = np.arange(len(input_df))
+            train_val_index = np.arange(len(s_pairs))
             np.random.shuffle(train_val_index)
-            num_val = int(self.conf['val_ratio'] * len(input_df))
-            num_tr = len(input_df) - num_val
+            num_val = int(self.conf['val_ratio'] * len(s_pairs))
+            num_tr = len(s_pairs) - num_val
             train_index = train_val_index[:num_tr]
             val_index = train_val_index[num_tr:]
             self.train_index = train_index
             self.val_index = val_index
 
             # Training dataset.
-            input_dataset = tf.data.Dataset.from_tensor_slices(input_df.iloc[train_index].to_dict('list'))
+            input_dataset = tf.data.Dataset.from_tensor_slices(s_pairs[self.train_index])
             input_dataset = input_dataset.map(make_input_features)
-        elif self.conf['cv_type'] == CV_TYPE_K_FOLD:
+
+            dummy_target_dataset_1 = tf.data.Dataset.range(num_tr)
+            dummy_target_dataset_2 = tf.data.Dataset.range(num_tr)
+
+            f_target_dataset = tf.data.Dataset.zip((dummy_target_dataset_1, dummy_target_dataset_2))
+
+            # Inputs and targets.
+            tr_dataset = tf.data.Dataset.zip((input_dataset, f_target_dataset))
+            tr_dataset = tr_dataset.shuffle(buffer_size=self.hps['batch_size'] * 5
+                                            , reshuffle_each_iteration=True).repeat().batch(self.hps['batch_size'])
+            self.step = len(s_pairs[self.train_index]) // self.hps['batch_size']
+
+            # Validation dataset.
+            input_dataset = tf.data.Dataset.from_tensor_slices(s_pairs[self.val_index])
+            input_dataset = input_dataset.map(make_input_features)
+
+            dummy_target_dataset_1 = tf.data.Dataset.range(num_val)
+            dummy_target_dataset_2 = tf.data.Dataset.range(num_val)
+
+            f_target_dataset = tf.data.Dataset.zip((dummy_target_dataset_1, dummy_target_dataset_2))
+
+            # Inputs and targets.
+            val_dataset = tf.data.Dataset.zip((input_dataset, f_target_dataset)).batch(self.hps['batch_size'])
+
+            self.trval_extractor_dataset = (tr_dataset, val_dataset)
+        elif self.conf['cv_type'] == CV_TYPE_K_FOLD: #?
+            kfold = KFold(n_splits=self.nn_arch['k_fold'])
             stratified_kfold = StratifiedKFold(n_splits=self.nn_arch['k_fold'])
             # group_kfold = GroupKFold(n_splits=self.nn_arch['k_fold'])
-            self.k_fold_trval_datasets = []
+            self.k_fold_trval_extractor_datasets = []
 
-            for train_index, val_index in stratified_kfold.split(input_df, input_df.cp_type):
+            for train_pairs, val_pairs in kfold.split(s_pairs):
                 # Training dataset.
-                input_dataset = tf.data.Dataset.from_tensor_slices(input_df.iloc[train_index].to_dict('list'))
+                input_dataset = tf.data.Dataset.from_tensor_slices(train_pairs)
                 input_dataset = input_dataset.map(make_input_features)
+
+                dummy_target_dataset_1 = tf.data.Dataset.range(len(train_pairs))
+                dummy_target_dataset_2 = tf.data.Dataset.range(len(train_pairs))
+
+                f_target_dataset = tf.data.Dataset.zip((dummy_target_dataset_1, dummy_target_dataset_2))
+
+                # Inputs and targets.
+                tr_dataset = tf.data.Dataset.zip((input_dataset, f_target_dataset))
+                tr_dataset = tr_dataset.shuffle(buffer_size=self.hps['batch_size'] * 5
+                                                , reshuffle_each_iteration=True).repeat().batch(self.hps['batch_size'])
+                self.step = len(train_pairs) // self.hps['batch_size']
+
+                # Validation dataset.
+                input_dataset = tf.data.Dataset.from_tensor_slices(val_pairs)
+                input_dataset = input_dataset.map(make_input_features)
+
+                dummy_target_dataset_1 = tf.data.Dataset.range(len(val_pairs))
+                dummy_target_dataset_2 = tf.data.Dataset.range(len(val_pairs))
+
+                f_target_dataset = tf.data.Dataset.zip((dummy_target_dataset_1, dummy_target_dataset_2))
+
+                # Inputs and targets.
+                val_dataset = tf.data.Dataset.zip((input_dataset, f_target_dataset)).batch(self.hps['batch_size'])
+
+                trval_extractor_dataset = (tr_dataset, val_dataset)
+                self.k_fold_trval_extractor_datasets.append(trval_extractor_dataset)
         else:
             raise ValueError('cv_type is not valid.')
 
@@ -638,15 +768,15 @@ class MoAPredictorGNN(object):
                                                     , verbose=1
                                                     , save_best_only=True)
 
-                self.model.fit_generator(self.trval_dataset[0]
+                self.model.fit_generator(self.trval_extractor_dataset[0]
                                                     , steps_per_epoch=self.step
                                                     , epochs=self.hps['epochs']
                                                     , verbose=1
                                                     , max_queue_size=80
                                                     , workers=4
                                                     , use_multiprocessing=False
-                                                    , callbacks=[model_check_point]  # , reduce_lr, tensorboard]
-                                                    , validation_data=self.trval_dataset[1]
+                                                    , callbacks=[model_check_point, reduce_lr] #, tensorboard]
+                                                    , validation_data=self.trval_extractor_dataset[1]
                                                     , validation_freq=1
                                                     , shuffle=True)
             elif self.conf['cv_type'] == CV_TYPE_K_FOLD:
@@ -656,15 +786,15 @@ class MoAPredictorGNN(object):
                                                         , verbose=1
                                                         , save_best_only=True)
 
-                    self.k_fold_models[i].fit_generator(self.k_fold_trval_datasets[i][0]
+                    self.k_fold_models[i].fit_generator(self.k_fold_trval_extractor_datasets[i][0]
                                                         , steps_per_epoch=self.step
                                                         , epochs=self.hps['epochs']
                                                         , verbose=1
                                                         , max_queue_size=80
                                                         , workers=4
                                                         , use_multiprocessing=False
-                                                        , callbacks=[model_check_point]  # , reduce_lr, tensorboard]
-                                                        , validation_data=self.k_fold_trval_datasets[i][1]
+                                                        , callbacks=[model_check_point, reduce_lr] #, tensorboard]
+                                                        , validation_data=self.k_fold_trval_extractor_datasets[i][1]
                                                         , validation_freq=1
                                                         , shuffle=True)
             else:
@@ -705,31 +835,32 @@ class MoAPredictorGNN(object):
         input_df.cp_dose = input_df.cp_dose.astype('category')
         input_df.cp_dose = input_df.cp_dose.cat.rename_categories(range(len(input_df.cp_dose.cat.categories)))
 
+        # Remove samples of ctl_vehicle.
+        input_df = input_df[input_df.cp_type == 1]
+
         target_scored_df = pd.read_csv(os.path.join(self.raw_data_path, 'train_targets_scored.csv')).iloc[:1024]
         target_scored_df = target_scored_df.iloc[self.val_index]
         MoA_annots = target_scored_df.columns[1:]
 
         def make_input_features(inputs):
             # Treatment.
-            cp_type = inputs['cp_type']
             cp_time = inputs['cp_time']
             cp_dose = inputs['cp_dose']
 
-            cp_type_onehot = tf.one_hot(cp_type, 2)
-            cp_time_onehot = tf.one_hot(cp_time, 3)
-            cp_dose_onehot = tf.one_hot(cp_dose, 2)
-
-            treatment_onehot = tf.concat([cp_type_onehot, cp_time_onehot, cp_dose_onehot], axis=-1)
+            treatment_type = cp_time * 2 + cp_dose
 
             # Gene expression.
-            gene_exps = [inputs['g-' + str(v)] for v in range(self.nn_arch['num_gene_exp'])]
+            gene_exps = [inputs['g-' + str(v)] for v in range(self.nn_arch['d_gene_exp'])]
             gene_exps = tf.stack(gene_exps, axis=0)
 
             # Cell viability.
-            cell_vs = [inputs['c-' + str(v)] for v in range(self.nn_arch['num_cell_type'])]
+            cell_vs = [inputs['c-' + str(v)] for v in range(self.nn_arch['d_cell_type'])]
             cell_vs = tf.stack(cell_vs, axis=0)
 
-            return (treatment_onehot, gene_exps, cell_vs)
+            # Adjacency matrix.
+            A_ = tf.cast(A, dtype='float32')
+
+            return (tf.expand_dims(treatment_type, axis=-1), gene_exps, cell_vs, A_)
 
         # Validation dataset.
         val_dataset = tf.data.Dataset.from_tensor_slices(input_df.iloc[self.val_index].to_dict('list'))
@@ -738,6 +869,7 @@ class MoAPredictorGNN(object):
         val_iter = val_dataset.as_numpy_iterator()
 
         # Predict MoAs.
+        gae = self.model.get_layer('gae')
         sig_id_list = []
         MoAs = [[] for _ in range(len(MoA_annots))]
 
@@ -747,10 +879,34 @@ class MoAPredictorGNN(object):
             t = np.expand_dims(t, axis=0)
             g = np.expand_dims(g, axis=0)
             c = np.expand_dims(c, axis=0)
+            A_ = A
 
             if self.conf['cv_type'] == CV_TYPE_TRAIN_VAL_SPLIT:
-                _, _, result = self.model.layers[-1]([t, g, c])  # self.model.predict([t, g, c])
-                result = np.squeeze(result, axis=0)
+                # First layer.
+                # X.
+                t = gae.embed_treatment_type_0(t)
+                t = tf.reshape(t, (-1, self.nn_arch['d_input_feature']))
+                t = gae.dense_treatment_type_0(t)
+                # t = self.batch_normalization_0_1(t)
+
+                g = gae.dense_gene_exp_0(g)
+                # g = self.batch_normalization_0_2(g)
+
+                c = gae.dense_cell_type_0(c)
+                # c = self.batch_normalization_0_3(c)
+
+                t = gae.layer_normalization_0_1(t)
+                g = gae.layer_normalization_0_2(g)
+                c = gae.layer_normalization_0_3(c)
+
+                t = tf.expand_dims(t, axis=1)
+                g = tf.expand_dims(g, axis=1)
+                c = tf.expand_dims(c, axis=1)
+
+                X = gae.concat_0([t, g, c])
+
+                # GCN encoding layer.
+                Z, _ = gae.gcn_encoder_1([X, A_])
 
                 for i, MoA in enumerate(result):
                     MoAs[i].append(MoA)

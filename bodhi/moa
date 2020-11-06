@@ -17,9 +17,13 @@ import tensorflow.keras as keras
 from tensorflow.keras.models import Model, load_model
 from tensorflow.keras.layers import Input, Conv1D, Dense, Concatenate, Dropout
 from tensorflow.keras.layers import LSTM, Bidirectional, BatchNormalization, LayerNormalization
-from tensorflow.python.keras.layers import Embedding, Layer
+from tensorflow.keras.layers import Embedding, Layer
 from tensorflow.keras import optimizers
 from tensorflow.keras.callbacks import TensorBoard, ReduceLROnPlateau, LearningRateScheduler, ModelCheckpoint
+from tensorflow.keras.constraints import UnitNorm
+from tensorflow.keras.initializers import RandomUniform, TruncatedNormal
+
+from tensorflow_addons.layers import WeightNormalization
 
 from ku.composite_layer import Transformer\
     , SIMILARITY_TYPE_DIFF_ABS\
@@ -47,7 +51,9 @@ CV_TYPE_K_FOLD = 'k_fold'
 
 epsilon = 1e-7
 
-def MoA_loss(W, ls=0.2):
+
+def MoA_loss(W, m=2.0 * np.pi / 300.0 , ls=0.2):
+    @tf.function
     def _MoA_loss(y_true, y_pred):
         y_pred = tf.maximum(tf.minimum(y_pred, 1.0 - 1e-15), 1e-15)
         y_true = tf.cast(y_true, dtype=tf.float32)
@@ -55,7 +61,7 @@ def MoA_loss(W, ls=0.2):
         neg_mask = 1.0 - y_true
 
         # Label smoothing.
-        y_true = pos_mask * y_true * (1.0 - ls / 2.0) + neg_mask * (y_true + ls / 2.0)
+        #y_true = pos_mask * y_true * (1.0 - ls / 2.0) + neg_mask * (y_true + ls / 2.0)
 
         '''
         pos_log_loss = pos_mask * W[:, :, 0] * tf.sqrt(tf.square(y_true - y_pred))
@@ -74,11 +80,24 @@ def MoA_loss(W, ls=0.2):
         #log_loss_mean = tf.reduce_mean(log_loss, axis=0) #?
         #loss = tf.reduce_mean(log_loss_mean, axis=0)
 
+        '''
         log_loss = -1.0 * (
                     y_true * tf.math.log(y_pred + epsilon) + (1.0 - y_true) * tf.math.log(1.0 - y_pred + epsilon))
         log_loss_mean = tf.reduce_mean(log_loss, axis=0)  # ?
         loss = tf.reduce_mean(log_loss_mean, axis=0)
+        '''
 
+        A = y_pred
+        e_AM_A = tf.math.exp(tf.math.cos(tf.math.acos(tf.clip_by_value(y_pred, clip_value_min=0.0, clip_value_max=1.0)) + m))
+        #d = A.shape[-1] #?
+        S = tf.tile(tf.reduce_sum(y_pred, axis=1, keepdims=True), (1, 206))
+        S_p = S - tf.math.exp(A) + e_AM_A
+        P = e_AM_A / (S_p + epsilon)
+
+        log_loss_1 = -1.0 * y_true * tf.math.log(P + epsilon)
+        log_loss_2 = tf.reduce_sum(log_loss_1, axis=1)
+        loss = tf.reduce_mean(log_loss_2, axis=0)
+        #tf.print(A, e_AM_A, S, S_p, P, log_loss_1, log_loss_2, loss)
         return loss
     return _MoA_loss
 
@@ -94,6 +113,7 @@ def MoA_metric(y_true, y_pred):
 
 MoA_metric.__name__ = 'MoA_metric'
 
+
 class _MoAPredictor(Layer):
     def __init__(self, conf, **kwargs):
         super(_MoAPredictor, self).__init__(**kwargs)
@@ -105,12 +125,17 @@ class _MoAPredictor(Layer):
 
         # Design layers.
         # First layers.
+        self.embed_treatment_type_0 = Embedding(self.nn_arch['num_treatment_type']
+                                           , self.nn_arch['d_input_feature'])
+        self.dense_treatment_type_0 = Dense(self.nn_arch['d_input_feature']
+                                       , activation='relu')
+
         self.layer_normalization_0_1 = LayerNormalization()
         self.layer_normalization_0_2 = LayerNormalization()
         self.layer_normalization_0_3 = LayerNormalization()
 
         # Autoencoder for gene expression.
-        input_gene_exp_1 = Input(shape=(self.nn_arch['num_gene_exp'],))
+        input_gene_exp_1 = Input(shape=(self.nn_arch['d_gene_exp'],))
 
         dense_1_1 = Dense(self.nn_arch['dense_1_1_d'], activation='swish')
         batch_normalization_1_1 = BatchNormalization()
@@ -146,7 +171,7 @@ class _MoAPredictor(Layer):
                                                 , layer_norm_f=False))
 
         # Autoencoder for cell type.
-        input_gene_exp_2 = Input(shape=(self.nn_arch['num_cell_type'],))
+        input_gene_exp_2 = Input(shape=(self.nn_arch['d_cell_type'],))
 
         dense_2_1 = Dense(self.nn_arch['dense_2_1_d'], activation='swish')
         batch_normalization_2_1 = BatchNormalization()
@@ -202,7 +227,10 @@ class _MoAPredictor(Layer):
         self.dense_4_1 = Dense(self.nn_arch['dense_4_1_d'], activation='swish')
         self.dense_4_2 = Dense(self.nn_arch['dense_4_2_d'], activation='swish')
         self.dense_4_3 = Dense(self.nn_arch['dense_4_3_d'], activation='swish')
-        self.dense_4_4 = Dense(self.nn_arch['num_moa_annotation'], activation='sigmoid') #?
+        self.dense_4_4 = WeightNormalization(Dense(self.nn_arch['num_moa_annotation']
+                               , activation='linear'
+                               , kernel_initializer=TruncatedNormal()
+                               , use_bias=False)) #?
 
     def call(self, inputs):
         t = inputs[0]
@@ -210,6 +238,10 @@ class _MoAPredictor(Layer):
         c = inputs[2]
 
         # First layers.
+        t = self.embed_treatment_type_0(t)
+        t = tf.reshape(t, (-1, self.nn_arch['d_input_feature']))
+        t = self.dense_treatment_type_0(t)
+
         t = self.layer_normalization_0_1(t)
         g = self.layer_normalization_0_2(g)
         c = self.layer_normalization_0_3(c)
@@ -237,9 +269,12 @@ class _MoAPredictor(Layer):
         x = self.dense_4_1(x)
         x = self.dense_4_2(x)
         x = self.dense_4_3(x)
-        x = self.dense_4_4(x)
-        outputs = [x_g, x_c, x]
 
+        # Normalize x.
+        x = x / tf.sqrt(tf.reduce_sum(tf.square(x), axis=1, keepdims=True))
+        x1 = self.dense_4_4(x)
+        outputs = [x_g, x_c, x1]
+        # tf.sqrt(tf.reduce_sum(tf.square(self.dense_4_4.weights[1][:, 0])))
         return outputs
 
     def get_config(self):
@@ -288,16 +323,16 @@ class MoAPredictor(object):
                                       , beta_2=self.hps['beta_2']
                                       , decay=self.hps['decay'])
                 self.model.compile(optimizer=opt
-                              , loss=['mse', 'mse', MoA_loss(W, self.hps['ls'])]
+                              , loss=['mse', 'mse', MoA_loss(W, self.nn_arch['additive_margin'], self.hps['ls'])]
                               , loss_weights=self.hps['loss_weights']
                               , metrics=[['mse'], ['mse'], [MoA_metric]]
                               , run_eagerly=False)
             else:
                 # Design the MoA prediction model.
                 # Input.
-                input_t = Input(shape=(self.nn_arch['treatment_onehot_d'],))
-                input_g = Input(shape=(self.nn_arch['num_gene_exp'],))
-                input_c = Input(shape=(self.nn_arch['num_cell_type'],))
+                input_t = Input(shape=(self.nn_arch['d_treatment_type'],))
+                input_g = Input(shape=(self.nn_arch['d_gene_exp'],))
+                input_c = Input(shape=(self.nn_arch['d_cell_type'],))
 
                 outputs = _MoAPredictor(self.conf, name='moap')([input_t, input_g, input_c])
 
@@ -308,10 +343,10 @@ class MoAPredictor(object):
 
                 self.model = Model(inputs=[input_t, input_g, input_c], outputs=outputs)
                 self.model.compile(optimizer=opt
-                              , loss=['mse', 'mse', MoA_loss(W, self.hps['ls'])]
+                              , loss=['mse', 'mse', MoA_loss(W, self.nn_arch['additive_margin'], self.hps['ls'])]
                               , loss_weights=self.hps['loss_weights']
                               , metrics=[['mse'], ['mse'], [MoA_metric]]
-                              , run_eagerly=False)
+                              , run_eagerly=True)
                 self.model.summary()
         elif self.conf['cv_type'] == CV_TYPE_K_FOLD:
             self.k_fold_models = []
@@ -330,18 +365,18 @@ class MoAPredictor(object):
                                             , 'MoA_metric': MoA_metric
                                             , '_MoAPredictor': _MoAPredictor}))
                     self.k_fold_models[i].compile(optimizer=opt
-                                       , loss=['mse', 'mse', MoA_loss(W, self.hps['ls'])]
+                                       , loss=['mse', 'mse', MoA_loss(W, self.nn_arch['additive_margin'], self.hps['ls'])]
                                        , loss_weights=self.hps['loss_weights']
                                        , metrics=[['mse'], ['mse'], [MoA_metric]]
-                                       , run_eagerly=False)
+                                       , run_eagerly=True)
             else:
                 # Create models for K-fold.
                 for i in range(self.nn_arch['k_fold']):
                     # Design the MoA prediction model.
                     # Input.
-                    input_t = Input(shape=(self.nn_arch['treatment_onehot_d'],))
-                    input_g = Input(shape=(self.nn_arch['num_gene_exp'],))
-                    input_c = Input(shape=(self.nn_arch['num_cell_type'],))
+                    input_t = Input(shape=(self.nn_arch['d_treatment_type'],))
+                    input_g = Input(shape=(self.nn_arch['d_gene_exp'],))
+                    input_c = Input(shape=(self.nn_arch['d_cell_type'],))
 
                     outputs = _MoAPredictor(self.conf)([input_t, input_g, input_c])
 
@@ -352,10 +387,10 @@ class MoAPredictor(object):
 
                     model = Model(inputs=[input_t, input_g, input_c], outputs=outputs)
                     model.compile(optimizer=opt
-                                  , loss=['mse', 'mse', MoA_loss(W)]
+                                  , loss=['mse', 'mse', MoA_loss(W, self.nn_arch['additive_margin'], self.hps['ls'])]
                                   , loss_weights=self.hps['loss_weights']
                                   , metrics=[['mse'], ['mse'], [MoA_metric]]
-                                  , run_eagerly=False)
+                                  , run_eagerly=True)
                     model.summary()
 
                     self.k_fold_models.append(model)
@@ -374,39 +409,39 @@ class MoAPredictor(object):
         input_df.cp_dose = input_df.cp_dose.astype('category')
         input_df.cp_dose = input_df.cp_dose.cat.rename_categories(range(len(input_df.cp_dose.cat.categories)))
 
+        # Remove samples of ctl_vehicle.
+        valid_indexes = input_df.cp_type == 1
+        input_df = input_df[valid_indexes]
+
         target_scored_df = pd.read_csv(os.path.join(self.raw_data_path, 'train_targets_scored.csv')).iloc[:1024]
+        target_scored_df = target_scored_df[valid_indexes]
         del target_scored_df['sig_id']
         target_scored_df.columns = range(len(target_scored_df.columns))
 
         def make_input_features(inputs):
             # Treatment.
-            cp_type = inputs['cp_type']
             cp_time = inputs['cp_time']
             cp_dose = inputs['cp_dose']
 
-            cp_type_onehot = tf.one_hot(cp_type, 2)
-            cp_time_onehot = tf.one_hot(cp_time, 3)
-            cp_dose_onehot = tf.one_hot(cp_dose, 2)
-
-            treatment_onehot = tf.concat([cp_type_onehot, cp_time_onehot, cp_dose_onehot], axis=-1)
+            treatment_type = cp_time * 2 + cp_dose
 
             # Gene expression.
-            gene_exps = [inputs['g-' + str(v)] for v in range(self.nn_arch['num_gene_exp'])]
+            gene_exps = [inputs['g-' + str(v)] for v in range(self.nn_arch['d_gene_exp'])]
             gene_exps = tf.stack(gene_exps, axis=0)
 
             # Cell viability.
-            cell_vs = [inputs['c-' + str(v)] for v in range(self.nn_arch['num_cell_type'])]
+            cell_vs = [inputs['c-' + str(v)] for v in range(self.nn_arch['d_cell_type'])]
             cell_vs = tf.stack(cell_vs, axis=0)
 
-            return (treatment_onehot, gene_exps, cell_vs)
+            return (tf.expand_dims(treatment_type, axis=-1), gene_exps, cell_vs)
 
         def make_a_target_features(inputs):
             # Gene expression.
-            gene_exps = [inputs['g-' + str(v)] for v in range(self.nn_arch['num_gene_exp'])]
+            gene_exps = [inputs['g-' + str(v)] for v in range(self.nn_arch['d_gene_exp'])]
             gene_exps = tf.stack(gene_exps, axis=0)
 
             # Cell viability.
-            cell_vs = [inputs['c-' + str(v)] for v in range(self.nn_arch['num_cell_type'])]
+            cell_vs = [inputs['c-' + str(v)] for v in range(self.nn_arch['d_cell_type'])]
             cell_vs = tf.stack(cell_vs, axis=0)
 
             return gene_exps, cell_vs
@@ -558,7 +593,7 @@ class MoAPredictor(object):
                                                 , max_queue_size=80
                                                 , workers=4
                                                 , use_multiprocessing=False
-                                                , callbacks=[model_check_point]  # , reduce_lr, tensorboard]
+                                                , callbacks=[model_check_point, reduce_lr] #, tensorboard]
                                                 , validation_data=self.trval_dataset[1]
                                                 , validation_freq=1
                                                 , shuffle=True)
@@ -576,7 +611,7 @@ class MoAPredictor(object):
                                                     , max_queue_size=80
                                                     , workers=4
                                                     , use_multiprocessing=False
-                                                    , callbacks=[model_check_point]  # , reduce_lr, tensorboard]
+                                                    , callbacks=[model_check_point, reduce_lr] #, tensorboard]
                                                     , validation_data=self.k_fold_trval_datasets[i][1]
                                                     , validation_freq=1
                                                     , shuffle=True)
@@ -599,31 +634,28 @@ class MoAPredictor(object):
         input_df.cp_dose = input_df.cp_dose.astype('category')
         input_df.cp_dose = input_df.cp_dose.cat.rename_categories(range(len(input_df.cp_dose.cat.categories)))
 
+        # Remove samples of ctl_vehicle.
+        valid_indexes = input_df.cp_type == 1  # ?
         target_scored_df = pd.read_csv(os.path.join(self.raw_data_path, 'train_targets_scored.csv')).iloc[:1024]
         target_scored_df = target_scored_df.iloc[self.val_index]
         MoA_annots = target_scored_df.columns[1:]
 
         def make_input_features(inputs):
             # Treatment.
-            cp_type = inputs['cp_type']
             cp_time = inputs['cp_time']
             cp_dose = inputs['cp_dose']
 
-            cp_type_onehot = tf.one_hot(cp_type, 2)
-            cp_time_onehot = tf.one_hot(cp_time, 3)
-            cp_dose_onehot = tf.one_hot(cp_dose, 2)
-
-            treatment_onehot = tf.concat([cp_type_onehot, cp_time_onehot, cp_dose_onehot], axis=-1)
+            treatment_type = cp_time * 2 + cp_dose
 
             # Gene expression.
-            gene_exps = [inputs['g-' + str(v)] for v in range(self.nn_arch['num_gene_exp'])]
+            gene_exps = [inputs['g-' + str(v)] for v in range(self.nn_arch['d_gene_exp'])]
             gene_exps = tf.stack(gene_exps, axis=0)
 
             # Cell viability.
-            cell_vs = [inputs['c-' + str(v)] for v in range(self.nn_arch['num_cell_type'])]
+            cell_vs = [inputs['c-' + str(v)] for v in range(self.nn_arch['d_cell_type'])]
             cell_vs = tf.stack(cell_vs, axis=0)
 
-            return (treatment_onehot, gene_exps, cell_vs)
+            return (tf.expand_dims(treatment_type, axis=-1), gene_exps, cell_vs)
 
         # Validation dataset.
         val_dataset = tf.data.Dataset.from_tensor_slices(input_df.iloc[self.val_index].to_dict('list'))
@@ -689,31 +721,29 @@ class MoAPredictor(object):
         input_df.cp_dose = input_df.cp_dose.astype('category')
         input_df.cp_dose = input_df.cp_dose.cat.rename_categories(range(len(input_df.cp_dose.cat.categories)))
 
+        # Remove samples of ctl_vehicle.
+        valid_indexes = input_df.cp_type == 1 #?
         target_scored_df = pd.read_csv(os.path.join(self.raw_data_path, 'train_targets_scored.csv'))
         MoA_annots = target_scored_df.columns[1:]
 
         def make_input_features(inputs):
+            id_ = inputs['sig_id']
+
             # Treatment.
-            id = inputs['sig_id']
-            cp_type = inputs['cp_type']
             cp_time = inputs['cp_time']
             cp_dose = inputs['cp_dose']
 
-            cp_type_onehot = tf.one_hot(cp_type, 2)
-            cp_time_onehot = tf.one_hot(cp_time, 3)
-            cp_dose_onehot = tf.one_hot(cp_dose, 2)
-
-            treatment_onehot = tf.concat([cp_type_onehot, cp_time_onehot, cp_dose_onehot], axis=-1)
+            treatment_type = cp_time * 2 + cp_dose
 
             # Gene expression.
-            gene_exps = [inputs['g-' + str(v)] for v in range(self.nn_arch['num_gene_exp'])]
+            gene_exps = [inputs['g-' + str(v)] for v in range(self.nn_arch['d_gene_exp'])]
             gene_exps = tf.stack(gene_exps, axis=0)
 
             # Cell viability.
-            cell_vs = [inputs['c-' + str(v)] for v in range(self.nn_arch['num_cell_type'])]
+            cell_vs = [inputs['c-' + str(v)] for v in range(self.nn_arch['d_cell_type'])]
             cell_vs = tf.stack(cell_vs, axis=0)
 
-            return (id, treatment_onehot, gene_exps, cell_vs)
+            return (id_, tf.expand_dims(treatment_type, axis=-1), gene_exps, cell_vs)
 
         test_dataset = tf.data.Dataset.from_tensor_slices(input_df.to_dict('list'))
         test_dataset = test_dataset.map(make_input_features)
