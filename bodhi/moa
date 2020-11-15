@@ -14,6 +14,7 @@ from sklearn.model_selection import StratifiedKFold
 
 import tensorflow as tf
 import tensorflow.keras as keras
+from tensorflow.keras import backend as K
 from tensorflow.keras.models import Model, load_model
 from tensorflow.keras.layers import Input, Conv1D, Dense, Concatenate, Dropout
 from tensorflow.keras.layers import LSTM, Bidirectional, BatchNormalization, LayerNormalization
@@ -23,19 +24,16 @@ from tensorflow.keras.callbacks import TensorBoard, ReduceLROnPlateau, LearningR
 from tensorflow.keras.constraints import UnitNorm
 from tensorflow.keras.initializers import RandomUniform, TruncatedNormal
 
-from tensorflow_addons.layers import WeightNormalization
-
-from ku.composite_layer import Transformer\
-    , SIMILARITY_TYPE_DIFF_ABS\
-    , SIMILARITY_TYPE_PLAIN\
-    , SIMILARITY_TYPE_SCALED\
-    , SIMILARITY_TYPE_GENERAL\
-    , SIMILARITY_TYPE_ADDITIVE
-
+from ku.composite_layer import (Transformer
+    , SIMILARITY_TYPE_DIFF_ABS
+    , SIMILARITY_TYPE_PLAIN
+    , SIMILARITY_TYPE_SCALED
+    , SIMILARITY_TYPE_GENERAL
+    , SIMILARITY_TYPE_ADDITIVE)
 from ku.composite_layer import DenseBatchNormalization
-from ku.backprop import make_decoder_from_encoder\
-    , make_autoencoder_from_encoder\
-    , make_autoencoder_with_sym_sc
+from ku.backprop import (make_decoder_from_encoder
+    , make_autoencoder_from_encoder
+    , make_autoencoder_with_sym_sc)
 
 # os.environ["CUDA_DEVICE_ORDER"] = 'PCI_BUS_ID'
 # os.environ["CUDA_VISIBLE_DEVICES"] = '-1'
@@ -49,13 +47,15 @@ MODE_VAL = 1
 CV_TYPE_TRAIN_VAL_SPLIT = 'train_val_split'
 CV_TYPE_K_FOLD = 'k_fold'
 
+DATASET_TYPE_PLAIN = 'plain'
+DATASET_TYPE_BALANCED = 'balanced'
+
 epsilon = 1e-7
 
 
-def MoA_loss(W, m=2.0 * np.pi / 300.0 , ls=0.2):
+def MoA_loss(W, m=0.5 , ls=0.2, scale=64.0):
     @tf.function
     def _MoA_loss(y_true, y_pred):
-        y_pred = tf.maximum(tf.minimum(y_pred, 1.0 - 1e-15), 1e-15)
         y_true = tf.cast(y_true, dtype=tf.float32)
         pos_mask = y_true
         neg_mask = 1.0 - y_true
@@ -88,13 +88,15 @@ def MoA_loss(W, m=2.0 * np.pi / 300.0 , ls=0.2):
         '''
 
         A = y_pred
-        e_AM_A = tf.math.exp(tf.math.cos(tf.math.acos(tf.clip_by_value(y_pred, clip_value_min=0.0, clip_value_max=1.0)) + m))
+        e_AM_A = tf.math.exp(scale * tf.math.cos(tf.math.acos(A) + m))
         #d = A.shape[-1] #?
-        S = tf.tile(tf.reduce_sum(y_pred, axis=1, keepdims=True), (1, 206))
+        S = tf.tile(tf.reduce_sum(tf.math.exp(A), axis=1, keepdims=True), (1, 206))
         S_p = S - tf.math.exp(A) + e_AM_A
         P = e_AM_A / (S_p + epsilon)
+        #P = tf.clip_by_value(P, clip_value_min=epsilon, clip_value_max=(1.0 - epsilon))
 
-        log_loss_1 = -1.0 * y_true * tf.math.log(P + epsilon)
+        #log_loss_1 = -1.0 * W[:, :, 0] * y_true * tf.math.log(P)
+        log_loss_1 = -1.0 * y_true * tf.math.log(P)
         log_loss_2 = tf.reduce_sum(log_loss_1, axis=1)
         loss = tf.reduce_mean(log_loss_2, axis=0)
         #tf.print(A, e_AM_A, S, S_p, P, log_loss_1, log_loss_2, loss)
@@ -103,7 +105,17 @@ def MoA_loss(W, m=2.0 * np.pi / 300.0 , ls=0.2):
 
 
 def MoA_metric(y_true, y_pred):
-    y_pred = tf.maximum(tf.minimum(y_pred, 1.0 - 1e-15), 1e-15)
+    s_n = 1.4
+    E = tf.reduce_mean(tf.math.exp(y_pred), axis=1, keepdims=True)
+    E_2 = tf.reduce_mean(tf.square(tf.math.exp(y_pred)), axis=1, keepdims=True)
+    S = tf.sqrt(E_2 - tf.square(E))
+
+    e_A = tf.clip_by_value(tf.math.abs(tf.exp(y_pred) - E) / (S + epsilon)
+                           , clip_value_min=s_n
+                           , clip_value_max=10000000.0) - s_n
+    p_hat = e_A / (tf.reduce_sum(e_A, axis=1, keepdims=True) + epsilon)
+
+    y_pred = tf.maximum(tf.minimum(p_hat, 1.0 - 1e-15), 1e-15)
     y_true = tf.cast(y_true, dtype=tf.float32)
 
     log_loss = -1.0 * (y_true * tf.math.log(y_pred + epsilon) + (1.0 - y_true) * tf.math.log(1.0 - y_pred + epsilon))
@@ -227,10 +239,11 @@ class _MoAPredictor(Layer):
         self.dense_4_1 = Dense(self.nn_arch['dense_4_1_d'], activation='swish')
         self.dense_4_2 = Dense(self.nn_arch['dense_4_2_d'], activation='swish')
         self.dense_4_3 = Dense(self.nn_arch['dense_4_3_d'], activation='swish')
-        self.dense_4_4 = WeightNormalization(Dense(self.nn_arch['num_moa_annotation']
+        self.dense_4_4 = Dense(self.nn_arch['num_moa_annotation']
                                , activation='linear'
                                , kernel_initializer=TruncatedNormal()
-                               , use_bias=False)) #?
+                               , kernel_constraint=UnitNorm()
+                               , use_bias=False) #?
 
     def call(self, inputs):
         t = inputs[0]
@@ -323,7 +336,10 @@ class MoAPredictor(object):
                                       , beta_2=self.hps['beta_2']
                                       , decay=self.hps['decay'])
                 self.model.compile(optimizer=opt
-                              , loss=['mse', 'mse', MoA_loss(W, self.nn_arch['additive_margin'], self.hps['ls'])]
+                                   , loss=['mse', 'mse', MoA_loss(W
+                                                                  , self.nn_arch['additive_margin']
+                                                                  , self.hps['ls']
+                                                                  , self.nn_arch['scale'])]
                               , loss_weights=self.hps['loss_weights']
                               , metrics=[['mse'], ['mse'], [MoA_metric]]
                               , run_eagerly=False)
@@ -343,7 +359,10 @@ class MoAPredictor(object):
 
                 self.model = Model(inputs=[input_t, input_g, input_c], outputs=outputs)
                 self.model.compile(optimizer=opt
-                              , loss=['mse', 'mse', MoA_loss(W, self.nn_arch['additive_margin'], self.hps['ls'])]
+                                   , loss=['mse', 'mse', MoA_loss(W
+                                                                  , self.nn_arch['additive_margin']
+                                                                  , self.hps['ls']
+                                                                  , self.nn_arch['scale'])]
                               , loss_weights=self.hps['loss_weights']
                               , metrics=[['mse'], ['mse'], [MoA_metric]]
                               , run_eagerly=True)
@@ -365,7 +384,10 @@ class MoAPredictor(object):
                                             , 'MoA_metric': MoA_metric
                                             , '_MoAPredictor': _MoAPredictor}))
                     self.k_fold_models[i].compile(optimizer=opt
-                                       , loss=['mse', 'mse', MoA_loss(W, self.nn_arch['additive_margin'], self.hps['ls'])]
+                                       , loss=['mse', 'mse', MoA_loss(W
+                                                                      , self.nn_arch['additive_margin']
+                                                                      , self.hps['ls']
+                                                                      , self.nn_arch['scale'])]
                                        , loss_weights=self.hps['loss_weights']
                                        , metrics=[['mse'], ['mse'], [MoA_metric]]
                                        , run_eagerly=True)
@@ -378,7 +400,7 @@ class MoAPredictor(object):
                     input_g = Input(shape=(self.nn_arch['d_gene_exp'],))
                     input_c = Input(shape=(self.nn_arch['d_cell_type'],))
 
-                    outputs = _MoAPredictor(self.conf)([input_t, input_g, input_c])
+                    outputs = _MoAPredictor(self.conf, name='moap')([input_t, input_g, input_c])
 
                     opt = optimizers.Adam(lr=self.hps['lr']
                                           , beta_1=self.hps['beta_1']
@@ -387,7 +409,10 @@ class MoAPredictor(object):
 
                     model = Model(inputs=[input_t, input_g, input_c], outputs=outputs)
                     model.compile(optimizer=opt
-                                  , loss=['mse', 'mse', MoA_loss(W, self.nn_arch['additive_margin'], self.hps['ls'])]
+                                  , loss=['mse', 'mse', MoA_loss(W
+                                                                 , self.nn_arch['additive_margin']
+                                                                 , self.hps['ls']
+                                                                 , self.nn_arch['scale'])]
                                   , loss_weights=self.hps['loss_weights']
                                   , metrics=[['mse'], ['mse'], [MoA_metric]]
                                   , run_eagerly=True)
@@ -457,50 +482,120 @@ class MoAPredictor(object):
             return input1[0], input1[1], input2
 
         if self.conf['cv_type'] == CV_TYPE_TRAIN_VAL_SPLIT:
-            train_val_index = np.arange(len(input_df))
-            np.random.shuffle(train_val_index)
-            num_val = int(self.conf['val_ratio'] * len(input_df))
-            num_tr = len(input_df) - num_val
-            train_index = train_val_index[:num_tr]
-            val_index = train_val_index[num_tr:]
-            self.train_index = train_index
-            self.val_index = val_index
+            if self.conf['dataset_type'] == DATASET_TYPE_PLAIN:
+                train_val_index = np.arange(len(input_df))
+                np.random.shuffle(train_val_index)
+                num_val = int(self.conf['val_ratio'] * len(input_df))
+                num_tr = len(input_df) - num_val
+                train_index = train_val_index[:num_tr]
+                val_index = train_val_index[num_tr:]
+                self.train_index = train_index
+                self.val_index = val_index
 
-            # Training dataset.
-            input_dataset = tf.data.Dataset.from_tensor_slices(input_df.iloc[train_index].to_dict('list'))
-            input_dataset = input_dataset.map(make_input_features)
+                # Training dataset.
+                input_dataset = tf.data.Dataset.from_tensor_slices(input_df.iloc[train_index].to_dict('list'))
+                input_dataset = input_dataset.map(make_input_features)
 
-            a_target_dataset = tf.data.Dataset.from_tensor_slices(input_df.iloc[train_index].to_dict('list'))
-            a_target_dataset = a_target_dataset.map(make_a_target_features)
+                a_target_dataset = tf.data.Dataset.from_tensor_slices(input_df.iloc[train_index].to_dict('list'))
+                a_target_dataset = a_target_dataset.map(make_a_target_features)
 
-            target_dataset = tf.data.Dataset.from_tensor_slices(target_scored_df.iloc[train_index].to_dict('list'))
-            target_dataset = target_dataset.map(make_target_features)
+                target_dataset = tf.data.Dataset.from_tensor_slices(target_scored_df.iloc[train_index].to_dict('list'))
+                target_dataset = target_dataset.map(make_target_features)
 
-            f_target_dataset = tf.data.Dataset.zip((a_target_dataset, target_dataset)).map(divide_inputs)
+                f_target_dataset = tf.data.Dataset.zip((a_target_dataset, target_dataset)).map(divide_inputs)
 
-            # Inputs and targets.
-            tr_dataset = tf.data.Dataset.zip((input_dataset, f_target_dataset))
-            tr_dataset = tr_dataset.shuffle(buffer_size=self.hps['batch_size'] * 5
-                                            , reshuffle_each_iteration=True).repeat().batch(self.hps['batch_size'])
-            self.step = len(input_df.iloc[train_index]) // self.hps['batch_size']
+                # Inputs and targets.
+                tr_dataset = tf.data.Dataset.zip((input_dataset, f_target_dataset))
+                tr_dataset = tr_dataset.shuffle(buffer_size=self.hps['batch_size'] * 5
+                                                , reshuffle_each_iteration=True).repeat().batch(self.hps['batch_size'])
+                self.step = len(input_df.iloc[train_index]) // self.hps['batch_size']
 
-            # Validation dataset.
-            input_dataset = tf.data.Dataset.from_tensor_slices(input_df.iloc[val_index].to_dict('list'))
-            input_dataset = input_dataset.map(make_input_features)
+                # Validation dataset.
+                input_dataset = tf.data.Dataset.from_tensor_slices(input_df.iloc[val_index].to_dict('list'))
+                input_dataset = input_dataset.map(make_input_features)
 
-            a_target_dataset = tf.data.Dataset.from_tensor_slices(input_df.iloc[val_index].to_dict('list'))
-            a_target_dataset = a_target_dataset.map(make_a_target_features)
+                a_target_dataset = tf.data.Dataset.from_tensor_slices(input_df.iloc[val_index].to_dict('list'))
+                a_target_dataset = a_target_dataset.map(make_a_target_features)
 
-            target_dataset = tf.data.Dataset.from_tensor_slices(target_scored_df.iloc[val_index].to_dict('list'))
-            target_dataset = target_dataset.map(make_target_features)
+                target_dataset = tf.data.Dataset.from_tensor_slices(target_scored_df.iloc[val_index].to_dict('list'))
+                target_dataset = target_dataset.map(make_target_features)
 
-            f_target_dataset = tf.data.Dataset.zip((a_target_dataset, target_dataset)).map(divide_inputs)
+                f_target_dataset = tf.data.Dataset.zip((a_target_dataset, target_dataset)).map(divide_inputs)
 
-            # Inputs and targets.
-            val_dataset = tf.data.Dataset.zip((input_dataset, f_target_dataset))
-            val_dataset = val_dataset.batch(self.hps['batch_size'])
+                # Inputs and targets.
+                val_dataset = tf.data.Dataset.zip((input_dataset, f_target_dataset))
+                val_dataset = val_dataset.batch(self.hps['batch_size'])
 
-            self.trval_dataset = (tr_dataset, val_dataset)
+                self.trval_dataset = (tr_dataset, val_dataset)
+            elif self.conf['dataset_type'] == DATASET_TYPE_BALANCED:
+                MoA_p_sets = []
+                for col in target_scored_df.columns:
+                    s = target_scored_df.iloc[:, col]
+                    s = s[s == 1]
+                    MoA_p_sets.append(list(s.index))
+
+                idxes = []
+                for i in tqdm(range(self.hps['rep'])):
+                    for col in target_scored_df.columns:
+                        if len(MoA_p_sets[col]) == 0:
+                            continue
+
+                        idx = np.random.choice(MoA_p_sets[col], size=1, replace=True)[0]
+                        idxes.append(idx)
+
+                bs_input_df = input_df.loc[idxes]
+                bs_target_scored_df = target_scored_df.loc[idxes]
+                bs_input_df.shape, bs_target_scored_df.shape
+
+                input_df = bs_input_df.reset_index(drop=True)
+                target_scored_df = bs_target_scored_df.reset_index(drop=True)
+                
+                train_val_index = np.arange(len(input_df))
+                np.random.shuffle(train_val_index)
+                num_val = int(self.conf['val_ratio'] * len(input_df))
+                num_tr = len(input_df) - num_val
+                train_index = train_val_index[:num_tr]
+                val_index = train_val_index[num_tr:]
+                self.train_index = train_index
+                self.val_index = val_index
+
+                # Training dataset.
+                input_dataset = tf.data.Dataset.from_tensor_slices(input_df.iloc[train_index].to_dict('list'))
+                input_dataset = input_dataset.map(make_input_features)
+
+                a_target_dataset = tf.data.Dataset.from_tensor_slices(input_df.iloc[train_index].to_dict('list'))
+                a_target_dataset = a_target_dataset.map(make_a_target_features)
+
+                target_dataset = tf.data.Dataset.from_tensor_slices(target_scored_df.iloc[train_index].to_dict('list'))
+                target_dataset = target_dataset.map(make_target_features)
+
+                f_target_dataset = tf.data.Dataset.zip((a_target_dataset, target_dataset)).map(divide_inputs)
+
+                # Inputs and targets.
+                tr_dataset = tf.data.Dataset.zip((input_dataset, f_target_dataset))
+                tr_dataset = tr_dataset.shuffle(buffer_size=self.hps['batch_size'] * 5
+                                                , reshuffle_each_iteration=True).repeat().batch(self.hps['batch_size'])
+                self.step = len(input_df.iloc[train_index]) // self.hps['batch_size']
+
+                # Validation dataset.
+                input_dataset = tf.data.Dataset.from_tensor_slices(input_df.iloc[val_index].to_dict('list'))
+                input_dataset = input_dataset.map(make_input_features)
+
+                a_target_dataset = tf.data.Dataset.from_tensor_slices(input_df.iloc[val_index].to_dict('list'))
+                a_target_dataset = a_target_dataset.map(make_a_target_features)
+
+                target_dataset = tf.data.Dataset.from_tensor_slices(target_scored_df.iloc[val_index].to_dict('list'))
+                target_dataset = target_dataset.map(make_target_features)
+
+                f_target_dataset = tf.data.Dataset.zip((a_target_dataset, target_dataset)).map(divide_inputs)
+
+                # Inputs and targets.
+                val_dataset = tf.data.Dataset.zip((input_dataset, f_target_dataset))
+                val_dataset = val_dataset.batch(self.hps['batch_size'])
+
+                self.trval_dataset = (tr_dataset, val_dataset)
+            else:
+                raise ValueError('dataset type is not valid.')
         elif self.conf['cv_type'] == CV_TYPE_K_FOLD:
             stratified_kfold = StratifiedKFold(n_splits=self.nn_arch['k_fold'])
             # group_kfold = GroupKFold(n_splits=self.nn_arch['k_fold'])
@@ -677,6 +772,7 @@ class MoAPredictor(object):
             if self.conf['cv_type'] == CV_TYPE_TRAIN_VAL_SPLIT:
                 _, _, result = self.model.layers[-1]([t, g, c])  # self.model.predict([t, g, c])
                 result = np.squeeze(result, axis=0)
+                #result = np.exp(result) / (np.sum(np.exp(result), axis=0) + epsilon)
 
                 for i, MoA in enumerate(result):
                     MoAs[i].append(MoA)
@@ -687,6 +783,7 @@ class MoAPredictor(object):
                 for i in range(self.nn_arch['k_fold']):
                     _, _, result = self.k_fold_models[i].predict([t, g, c])
                     result = np.squeeze(result, axis=0)
+                    #result = np.exp(result) / (np.sum(np.exp(result), axis=0) + epsilon)
                     result_list.append(result)
 
                 result_mean = np.asarray(result_list).mean(axis=0)
@@ -697,7 +794,6 @@ class MoAPredictor(object):
                 raise ValueError('cv_type is not valid.')
 
             sig_id_list.append(id)
-
 
         # Save the result.
         result_dict = {'sig_id': sig_id_list}
@@ -762,6 +858,7 @@ class MoAPredictor(object):
             if self.conf['cv_type'] == CV_TYPE_TRAIN_VAL_SPLIT:
                 _, _, result = self.model.layers[-1]([t, g, c]) #self.model.predict([t, g, c])
                 result = np.squeeze(result, axis=0)
+                result = np.exp(result) / (np.sum(np.exp(result), axis=0) + epsilon)
 
                 for i, MoA in enumerate(result):
                     MoAs[i].append(MoA)
@@ -772,6 +869,7 @@ class MoAPredictor(object):
                 for i in range(self.nn_arch['k_fold']):
                     _, _, result = self.k_fold_models[i].predict([t, g, c])
                     result = np.squeeze(result, axis=0)
+                    result = np.exp(result) / (np.sum(np.exp(result), axis=0) + epsilon)
                     result_list.append(result)
 
                 result_mean = np.asarray(result_list).mean(axis=0)
