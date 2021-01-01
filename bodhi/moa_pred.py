@@ -23,17 +23,15 @@ from tensorflow.keras.layers import Input, Conv1D, Dense, Concatenate, Dropout
 from tensorflow.keras.layers import LSTM, Bidirectional, BatchNormalization, LayerNormalization
 from tensorflow.keras.layers import Embedding, Layer
 from tensorflow.keras import optimizers
-from tensorflow.keras.callbacks import TensorBoard, ReduceLROnPlateau, LearningRateScheduler, ModelCheckpoint
+from tensorflow.keras.callbacks import (TensorBoard
+    , ReduceLROnPlateau
+    , LearningRateScheduler
+    , ModelCheckpoint
+    , EarlyStopping)
 from tensorflow.keras.constraints import UnitNorm
 from tensorflow.keras.initializers import RandomUniform, TruncatedNormal
 from tensorflow.keras import regularizers
 
-from ku.composite_layer import (Transformer
-    , SIMILARITY_TYPE_DIFF_ABS
-    , SIMILARITY_TYPE_PLAIN
-    , SIMILARITY_TYPE_SCALED
-    , SIMILARITY_TYPE_GENERAL
-    , SIMILARITY_TYPE_ADDITIVE)
 from ku.composite_layer import DenseBatchNormalization
 from ku.backprop import (make_decoder_from_encoder
     , make_autoencoder_from_encoder
@@ -163,7 +161,7 @@ class MoAMetric(Metric):
         loss = tf.reduce_mean(log_loss_mean, axis=0)
 
         self.total_loss.assign_add(loss)
-        self.count.assign_add(1.0)
+        self.count.assign_add(tf.constant(1.0))
 
     def result(self):
         return tf.math.divide_no_nan(self.total_loss, self.count)
@@ -199,31 +197,32 @@ class _MoAPredictor(Layer):
         self.layer_normalization_0_2 = LayerNormalization()
         self.layer_normalization_0_3 = LayerNormalization()
 
-        # Autoencoder for gene expression.
+        # Autoencoder for gene expression profile.
         input_gene_exp_1 = Input(shape=(self.nn_arch['d_gene_exp'],))
+        d_geps = [int(self.nn_arch['d_gep_init'] / np.power(2, v)) for v in range(4)]
 
-        dense_1_1 = Dense(self.nn_arch['dense_1_1_d'], activation='swish')
+        dense_1_1 = Dense(d_geps[0], activation='swish', kernel_regularizer=regularizers.l2(self.hps['weight_decay']))
         batch_normalization_1_1 = BatchNormalization()
         dropout_1_1 = None # Dropout(self.nn_arch['dropout_rate'])
         dense_batch_normalization_1_1 = DenseBatchNormalization(dense_1_1
                                                                 , batch_normalization_1_1
                                                                 , dropout=dropout_1_1)
 
-        dense_1_2 = Dense(self.nn_arch['dense_1_2_d'], activation='swish')
+        dense_1_2 = Dense(d_geps[1], activation='swish', kernel_regularizer=regularizers.l2(self.hps['weight_decay']))
         batch_normalization_1_2 = BatchNormalization()
         dropout_1_2 = None # Dropout(self.nn_arch['dropout_rate'])
         dense_batch_normalization_1_2 = DenseBatchNormalization(dense_1_2
                                                                 , batch_normalization_1_2
                                                                 , dropout=dropout_1_2)
 
-        dense_1_3 = Dense(self.nn_arch['dense_1_3_d'], activation='swish')
+        dense_1_3 = Dense(d_geps[2], activation='swish', kernel_regularizer=regularizers.l2(self.hps['weight_decay']))
         batch_normalization_1_3 = BatchNormalization()
         dropout_1_3 = None #Dropout(self.nn_arch['dropout_rate'])
         dense_batch_normalization_1_3 = DenseBatchNormalization(dense_1_3
                                                                 , batch_normalization_1_3
                                                                 , dropout=dropout_1_3)
 
-        dense_1_4 = Dense(self.nn_arch['dense_1_4_d'], activation='swish')
+        dense_1_4 = Dense(d_geps[3], activation='swish', kernel_regularizer=regularizers.l2(self.hps['weight_decay']))
         batch_normalization_1_4 = BatchNormalization()
         dropout_1_4 = None #Dropout(self.nn_arch['dropout_rate'])
         dense_batch_normalization_1_4 = DenseBatchNormalization(dense_1_4
@@ -238,34 +237,25 @@ class _MoAPredictor(Layer):
         self.decoder_gene_exp_1 = make_decoder_from_encoder(self.encoder_gene_exp_1)
         self.dropout_1 = Dropout(self.nn_arch['dropout_rate'])
 
-        # Transformer for gene expression.
-        self.transformer_gene_exps = []
-
-        for i in range(self.nn_arch['num_transformer']):
-            self.transformer_gene_exps.append(Transformer(1
-                                                , 1
-                                                , dropout_rate=self.nn_arch['dropout_rate']
-                                                , similarity_type=self.nn_arch['similarity_type']
-                                                , layer_norm_f=False))
-
         # Autoencoder for cell type.
         input_gene_exp_2 = Input(shape=(self.nn_arch['d_cell_type'],))
+        d_cvs = [int(self.nn_arch['d_cv_init'] / np.power(2, v)) for v in range(3)]
 
-        dense_2_1 = Dense(self.nn_arch['dense_2_1_d'], activation='swish')
+        dense_2_1 = Dense(d_cvs[0], activation='swish', kernel_regularizer=regularizers.l2(self.hps['weight_decay']))
         batch_normalization_2_1 = BatchNormalization()
         dropout_2_1 = None # Dropout(self.nn_arch['dropout_rate'])
         dense_batch_normalization_2_1 = DenseBatchNormalization(dense_2_1
                                                                 , batch_normalization_2_1
                                                                 , dropout=dropout_2_1)
 
-        dense_2_2 = Dense(self.nn_arch['dense_2_2_d'], activation='swish')
+        dense_2_2 = Dense(d_cvs[1], activation='swish', kernel_regularizer=regularizers.l2(self.hps['weight_decay']))
         batch_normalization_2_2 = BatchNormalization()
         dropout_2_2 = None # Dropout(self.nn_arch['dropout_rate'])
         dense_batch_normalization_2_2 = DenseBatchNormalization(dense_2_2
                                                                 , batch_normalization_2_2
                                                                 , dropout=dropout_2_2)
 
-        dense_2_3 = Dense(self.nn_arch['dense_2_3_d'], activation='swish')
+        dense_2_3 = Dense(d_cvs[2], activation='swish', kernel_regularizer=regularizers.l2(self.hps['weight_decay']))
         batch_normalization_2_3 = BatchNormalization()
         dropout_2_3 = None #Dropout(self.nn_arch['dropout_rate'])
         dense_batch_normalization_2_3 = DenseBatchNormalization(dense_2_3
@@ -285,29 +275,31 @@ class _MoAPredictor(Layer):
 
         for i in range(self.nn_arch['num_sc_ae']):
             input_sk_ae_3 = Input(shape=(self.nn_arch['d_hidden'],))
+            d_ae_init = d_geps[-1] + d_cvs[-1] + self.nn_arch['d_input_feature']
+            d_aes = [d_ae_init, int(d_ae_init * 2), int(d_ae_init * 2), d_ae_init]
 
-            dense_3_1 = Dense(self.nn_arch['dense_3_1_d'], activation='swish')
+            dense_3_1 = Dense(d_aes[0], activation='swish', kernel_regularizer=regularizers.l2(self.hps['weight_decay']))
             batch_normalization_3_1 = BatchNormalization()
             dropout_3_1 = None # Dropout(self.nn_arch['dropout_rate'])
             dense_batch_normalization_3_1 = DenseBatchNormalization(dense_3_1
                                                                     , batch_normalization_3_1
                                                                     , dropout=dropout_3_1)
 
-            dense_3_2 = Dense(self.nn_arch['dense_3_2_d'], activation='swish')
+            dense_3_2 = Dense(d_aes[1], activation='swish', kernel_regularizer=regularizers.l2(self.hps['weight_decay']))
             batch_normalization_3_2 = BatchNormalization()
             dropout_3_2 = None # Dropout(self.nn_arch['dropout_rate'])
             dense_batch_normalization_3_2 = DenseBatchNormalization(dense_3_2
                                                                     , batch_normalization_3_2
                                                                     , dropout=dropout_3_2)
 
-            dense_3_3 = Dense(self.nn_arch['dense_3_3_d'], activation='swish')
+            dense_3_3 = Dense(d_aes[2], activation='swish', kernel_regularizer=regularizers.l2(self.hps['weight_decay']))
             batch_normalization_3_3 = BatchNormalization()
             dropout_3_3 = None # Dropout(self.nn_arch['dropout_rate'])
             dense_batch_normalization_3_3 = DenseBatchNormalization(dense_3_3
                                                                     , batch_normalization_3_3
                                                                     , dropout=dropout_3_3)
 
-            dense_3_4 = Dense(self.nn_arch['dense_3_4_d'], activation='swish')
+            dense_3_4 = Dense(d_aes[3], activation='swish', kernel_regularizer=regularizers.l2(self.hps['weight_decay']))
             batch_normalization_3_4 = BatchNormalization()
             dropout_3_4 = None # Dropout(self.nn_arch['dropout_rate'])
             dense_batch_normalization_3_4 = DenseBatchNormalization(dense_3_4
@@ -323,9 +315,11 @@ class _MoAPredictor(Layer):
             self.sc_aes.append(make_autoencoder_with_sym_sc(sc_autoencoder_3))
 
         # Final layers.
-        self.dense_4_1 = Dense(self.nn_arch['dense_4_1_d'], activation='swish')
-        self.dense_4_2 = Dense(self.nn_arch['dense_4_2_d'], activation='swish')
-        self.dense_4_3 = Dense(self.nn_arch['dense_4_3_d'], activation='swish')
+        d_fs = [int(self.nn_arch['d_f_init'] / np.power(2, v)) for v in range(3)]
+
+        self.dense_4_1 = Dense(d_fs[0], activation='swish', kernel_regularizer=regularizers.l2(self.hps['weight_decay']))
+        self.dense_4_2 = Dense(d_fs[1], activation='swish', kernel_regularizer=regularizers.l2(self.hps['weight_decay']))
+        self.dense_4_3 = Dense(d_fs[2], activation='swish', kernel_regularizer=regularizers.l2(self.hps['weight_decay']))
         self.dropout_4_3 = Dropout(self.nn_arch['dropout_rate'])
 
         if self.conf['loss_type'] == LOSS_TYPE_MULTI_LABEL:
@@ -333,12 +327,14 @@ class _MoAPredictor(Layer):
                                    , activation='linear'
                                    , kernel_initializer=TruncatedNormal()
                                    , kernel_constraint=None
+                                   , kernel_regularizer=regularizers.l2(self.hps['weight_decay'])
                                    , use_bias=False) #?
         elif self.conf['loss_type'] == LOSS_TYPE_ADDITIVE_ANGULAR_MARGIN:
             self.dense_4_4 = Dense(self.nn_arch['num_moa_annotation']
                                    , activation='linear'
                                    , kernel_initializer=TruncatedNormal()
                                    , kernel_constraint=UnitNorm()
+                                   , kernel_regularizer=regularizers.l2(self.hps['weight_decay'])
                                    , use_bias=False) #?
         else:
             raise ValueError('loss type is not valid.')
@@ -361,8 +357,6 @@ class _MoAPredictor(Layer):
         g_e = self.encoder_gene_exp_1(g)
         x_g = self.decoder_gene_exp_1(g_e)
         x_g = tf.expand_dims(x_g, axis=-1)
-        for i in range(self.nn_arch['num_transformer']):
-            x_g = self.transformer_gene_exps[i]([x_g, x_g]) #?
         x_g = tf.squeeze(x_g, axis=-1)
         x_g = self.dropout_1(x_g)
 
@@ -427,12 +421,11 @@ class MoAPredictor(object):
         # Create weight for classification imbalance.
         W = self._create_W()
 
-        # with tpu_strategy.scope():
+        # with strategy.scope():
         if self.conf['cv_type'] == CV_TYPE_TRAIN_VAL_SPLIT:
             if self.model_loading:
                 self.model = load_model(self.MODEL_PATH + '.h5'
-                                        , custom_objects={'Transformer': Transformer
-                                            , 'MoALoss': MoALoss
+                                        , custom_objects={'MoALoss': MoALoss
                                             , 'MoAMetric': MoAMetric
                                             , '_MoAPredictor': _MoAPredictor}
                                         , compile=False)
@@ -487,8 +480,7 @@ class MoAPredictor(object):
                 # load models for K-fold.
                 for i in range(self.nn_arch['k_fold']):
                     self.k_fold_models.append(load_model(self.MODEL_PATH + '_' + str(i) + '.h5'
-                                                        , custom_objects={'Transformer': Transformer
-                                                            , 'MoALoss': MoALoss
+                                                        , custom_objects={'MoALoss': MoALoss
                                                             , 'MoAMetric': MoAMetric
                                                             , '_MoAPredictor': _MoAPredictor}
                                                          , compile=False))
@@ -548,50 +540,98 @@ class MoAPredictor(object):
         # Remove samples of ctl_vehicle.
         valid_indexes = input_df.cp_type == 1
         input_df = input_df[valid_indexes]
+        input_df = input_df.reset_index(drop=True)
 
         target_scored_df = pd.read_csv(os.path.join(self.raw_data_path, 'train_targets_scored.csv')) #.iloc[:1024]
         target_scored_df = target_scored_df[valid_indexes]
+        target_scored_df = target_scored_df.reset_index(drop=True)
         del target_scored_df['sig_id']
         target_scored_df.columns = range(len(target_scored_df.columns))
         n_target_samples = target_scored_df.sum().values
 
-        def make_input_features(inputs):
+        if self.conf['data_aug']:
+            genes = [col for col in input_df.columns if col.startswith("g-")]
+            cells = [col for col in input_df.columns if col.startswith("c-")]
+
+            features = genes + cells
+            targets = [col for col in target_scored_df if col != 'sig_id']
+
+            aug_trains = []
+            aug_targets = []
+            for t in [0, 1, 2]:
+                for d in [0, 1]:
+                    for _ in range(3):
+                        train1 = input_df.loc[(input_df['cp_time'] == t) & (input_df['cp_dose'] == d)]
+                        target1 = target_scored_df.loc[(input_df['cp_time'] == t) & (input_df['cp_dose'] == d)]
+                        ctl1 = input_df.loc[(input_df['cp_time'] == t) & (input_df['cp_dose'] == d)].sample(
+                            train1.shape[0], replace=True)
+                        ctl2 = input_df.loc[(input_df['cp_time'] == t) & (input_df['cp_dose'] == d)].sample(
+                            train1.shape[0], replace=True)
+                        train1[genes + cells] = train1[genes + cells].values + ctl1[genes + cells].values - ctl2[
+                            genes + cells].values
+                        aug_trains.append(train1)
+                        aug_targets.append(target1)
+
+            input_df = pd.concat(aug_trains).reset_index(drop=True)
+            target_scored_df = pd.concat(aug_targets).reset_index(drop=True)
+
+        g_feature_names = ['g-' + str(v) for v in range(self.nn_arch['d_gene_exp'])]
+        c_feature_names = ['c-' + str(v) for v in range(self.nn_arch['d_cell_type'])]
+        moa_names = [v for v in range(self.nn_arch['num_moa_annotation'])]
+
+        def get_series_from_input(idxes):
+            idxes = idxes.numpy()
+            series = input_df.iloc[idxes]
+
             # Treatment.
-            cp_time = inputs['cp_time']
-            cp_dose = inputs['cp_dose']
+            cp_time = series['cp_time'].values.to_numpy()
+            cp_dose = series['cp_dose'].values.to_numpy()
 
             treatment_type = cp_time * 2 + cp_dose
 
             # Gene expression.
-            gene_exps = [inputs['g-' + str(v)] for v in range(self.nn_arch['d_gene_exp'])]
-            gene_exps = tf.stack(gene_exps, axis=0)
+            gene_exps = series[g_feature_names].values
 
             # Cell viability.
-            cell_vs = [inputs['c-' + str(v)] for v in range(self.nn_arch['d_cell_type'])]
-            cell_vs = tf.stack(cell_vs, axis=0)
+            cell_vs = series[c_feature_names].values
 
-            return (tf.expand_dims(treatment_type, axis=-1), gene_exps, cell_vs)
+            return treatment_type, gene_exps, cell_vs
 
-        def make_a_target_features(inputs):
-            # Gene expression.
-            gene_exps = [inputs['g-' + str(v)] for v in range(self.nn_arch['d_gene_exp'])]
-            gene_exps = tf.stack(gene_exps, axis=0)
 
-            # Cell viability.
-            cell_vs = [inputs['c-' + str(v)] for v in range(self.nn_arch['d_cell_type'])]
-            cell_vs = tf.stack(cell_vs, axis=0)
+        def make_input_target_features(idxes):
+            treatment_type, gene_exps, cell_vs = tf.py_function(get_series_from_input, inp=[idxes], Tout=[tf.int64, tf.float64, tf.float64])
+            MoA_values = tf.py_function(get_series_from_target, inp=[idxes], Tout=tf.int32)
+            return ((treatment_type, gene_exps, cell_vs), (gene_exps, cell_vs, MoA_values))
 
+
+        def make_input_features(idx):
+            treatment_type, gene_exps, cell_vs = tf.py_function(get_series_from_input, inp=[idx], Tout=[tf.int32, tf.float64, tf.float64])
+            return treatment_type, gene_exps, cell_vs
+
+
+        def make_a_target_features(idx):
+            treatment_type, gene_exps, cell_vs = tf.py_function(get_series_from_input, inp=[idx], Tout=[tf.int32, tf.float64, tf.float64])
             return gene_exps, cell_vs
 
-        def make_target_features(inputs):
+
+        def get_series_from_target(idxes):
+            idxes = idxes.numpy()
+            series = target_scored_df.iloc[idxes]
+
             # MoA annotations' values.
-            MoA_values = [inputs[v] for v in range(self.nn_arch['num_moa_annotation'])]
-            MoA_values = tf.stack(MoA_values, axis=0)
+            MoA_values = series[moa_names].values
 
             return MoA_values
 
+
+        def make_target_features(idx):
+            MoA_values = tf.py_function(get_series_from_target, inp=[idx], Tout=tf.int32)
+            return MoA_values
+
+
         def divide_inputs(input1, input2):
             return input1[0], input1[1], input2
+
 
         if self.conf['cv_type'] == CV_TYPE_TRAIN_VAL_SPLIT:
             if self.conf['dataset_type'] == DATASET_TYPE_PLAIN:
@@ -605,13 +645,13 @@ class MoAPredictor(object):
                 self.val_index = val_index
 
                 # Training dataset.
-                input_dataset = tf.data.Dataset.from_tensor_slices(input_df.iloc[train_index].to_dict('list'))
+                input_dataset = tf.data.Dataset.from_tensor_slices(train_index)
                 input_dataset = input_dataset.map(make_input_features)
 
-                a_target_dataset = tf.data.Dataset.from_tensor_slices(input_df.iloc[train_index].to_dict('list'))
+                a_target_dataset = tf.data.Dataset.from_tensor_slices(train_index)
                 a_target_dataset = a_target_dataset.map(make_a_target_features)
 
-                target_dataset = tf.data.Dataset.from_tensor_slices(target_scored_df.iloc[train_index].to_dict('list'))
+                target_dataset = tf.data.Dataset.from_tensor_slices(train_index)
                 target_dataset = target_dataset.map(make_target_features)
 
                 f_target_dataset = tf.data.Dataset.zip((a_target_dataset, target_dataset)).map(divide_inputs)
@@ -620,16 +660,16 @@ class MoAPredictor(object):
                 tr_dataset = tf.data.Dataset.zip((input_dataset, f_target_dataset))
                 tr_dataset = tr_dataset.shuffle(buffer_size=self.hps['batch_size'] * 5
                                                 , reshuffle_each_iteration=True).repeat().batch(self.hps['batch_size'])
-                self.step = len(input_df.iloc[train_index]) // self.hps['batch_size']
+                self.step = len(train_index) // self.hps['batch_size']
 
                 # Validation dataset.
-                input_dataset = tf.data.Dataset.from_tensor_slices(input_df.iloc[val_index].to_dict('list'))
+                input_dataset = tf.data.Dataset.from_tensor_slices(val_index)
                 input_dataset = input_dataset.map(make_input_features)
 
-                a_target_dataset = tf.data.Dataset.from_tensor_slices(input_df.iloc[val_index].to_dict('list'))
+                a_target_dataset = tf.data.Dataset.from_tensor_slices(val_index)
                 a_target_dataset = a_target_dataset.map(make_a_target_features)
 
-                target_dataset = tf.data.Dataset.from_tensor_slices(target_scored_df.iloc[val_index].to_dict('list'))
+                target_dataset = tf.data.Dataset.from_tensor_slices(val_index)
                 target_dataset = target_dataset.map(make_target_features)
 
                 f_target_dataset = tf.data.Dataset.zip((a_target_dataset, target_dataset)).map(divide_inputs)
@@ -674,47 +714,25 @@ class MoAPredictor(object):
                             idx = np.random.choice(MoA_p_sets[col], size=1, replace=True)[0]
                         idxes.append(idx)
 
-                bs_input_df = input_df.loc[idxes]
-                bs_target_scored_df = target_scored_df.loc[idxes]
-                bs_input_df.shape, bs_target_scored_df.shape
-
-                train_index = np.arange(len(bs_input_df))
+                train_index = idxes
                 self.train_index = train_index
                 self.val_index = val_index
 
                 # Training dataset.
-                input_dataset = tf.data.Dataset.from_tensor_slices(bs_input_df.to_dict('list'))
-                input_dataset = input_dataset.map(make_input_features) #, num_parallel_calls=tf.data.experimental.AUTOTUNE)
-
-                a_target_dataset = tf.data.Dataset.from_tensor_slices(bs_input_df.to_dict('list'))
-                a_target_dataset = a_target_dataset.map(make_a_target_features) #, num_parallel_calls=tf.data.experimental.AUTOTUNE)
-
-                target_dataset = tf.data.Dataset.from_tensor_slices(bs_target_scored_df.to_dict('list'))
-                target_dataset = target_dataset.map(make_target_features) #, num_parallel_calls=tf.data.experimental.AUTOTUNE)
-
-                f_target_dataset = tf.data.Dataset.zip((a_target_dataset, target_dataset)).map(divide_inputs) #, num_parallel_calls=tf.data.experimental.AUTOTUNE)
+                tr_dataset = tf.data.Dataset.from_tensor_slices(train_index)
 
                 # Inputs and targets.
-                tr_dataset = tf.data.Dataset.zip((input_dataset, f_target_dataset))
                 tr_dataset = tr_dataset.shuffle(buffer_size=self.hps['batch_size'] * 5
-                                                , reshuffle_each_iteration=True).repeat().batch(self.hps['batch_size'])
-                self.step = len(bs_input_df) // self.hps['batch_size']
+                                                , reshuffle_each_iteration=True).repeat().batch(self.hps['batch_size']).map(make_input_target_features
+                                                , num_parallel_calls=tf.data.experimental.AUTOTUNE)
+                self.step = len(train_index) // self.hps['batch_size']
 
                 # Validation dataset.
-                input_dataset = tf.data.Dataset.from_tensor_slices(input_df.loc[val_index].to_dict('list'))
-                input_dataset = input_dataset.map(make_input_features) #, num_parallel_calls=tf.data.experimental.AUTOTUNE)
-
-                a_target_dataset = tf.data.Dataset.from_tensor_slices(input_df.loc[val_index].to_dict('list'))
-                a_target_dataset = a_target_dataset.map(make_a_target_features) #, num_parallel_calls=tf.data.experimental.AUTOTUNE)
-
-                target_dataset = tf.data.Dataset.from_tensor_slices(target_scored_df.loc[val_index].to_dict('list'))
-                target_dataset = target_dataset.map(make_target_features) #, num_parallel_calls=tf.data.experimental.AUTOTUNE)
-
-                f_target_dataset = tf.data.Dataset.zip((a_target_dataset, target_dataset)).map(divide_inputs) #, num_parallel_calls=tf.data.experimental.AUTOTUNE)
+                val_dataset = tf.data.Dataset.from_tensor_slices(val_index)
 
                 # Inputs and targets.
-                val_dataset = tf.data.Dataset.zip((input_dataset, f_target_dataset))
-                val_dataset = val_dataset.batch(self.hps['batch_size'])
+                val_dataset = val_dataset.batch(self.hps['batch_size']).map(make_input_target_features
+                                                , num_parallel_calls=tf.data.experimental.AUTOTUNE)
 
                 # Save datasets.
                 #tf.data.experimental.save(tr_dataset, './tr_dataset')
@@ -730,13 +748,13 @@ class MoAPredictor(object):
 
             for train_index, val_index in stratified_kfold.split(input_df, input_df.cp_type):
                 # Training dataset.
-                input_dataset = tf.data.Dataset.from_tensor_slices(input_df.iloc[train_index].to_dict('list'))
+                input_dataset = tf.data.Dataset.from_tensor_slices(train_index)
                 input_dataset = input_dataset.map(make_input_features)
 
-                a_target_dataset = tf.data.Dataset.from_tensor_slices(input_df.iloc[train_index].to_dict('list'))
+                a_target_dataset = tf.data.Dataset.from_tensor_slices(train_index)
                 a_target_dataset = a_target_dataset.map(make_a_target_features)
 
-                target_dataset = tf.data.Dataset.from_tensor_slices(target_scored_df.iloc[train_index].to_dict('list'))
+                target_dataset = tf.data.Dataset.from_tensor_slices(train_index)
                 target_dataset = target_dataset.map(make_target_features)
 
                 f_target_dataset = tf.data.Dataset.zip((a_target_dataset, target_dataset)).map(divide_inputs)
@@ -745,16 +763,16 @@ class MoAPredictor(object):
                 tr_dataset = tf.data.Dataset.zip((input_dataset, f_target_dataset))
                 tr_dataset = tr_dataset.shuffle(buffer_size=self.hps['batch_size'] * 5
                                                 , reshuffle_each_iteration=True).repeat().batch(self.hps['batch_size'])
-                self.step = len(input_df.iloc[train_index]) // self.hps['batch_size']
+                self.step = len(train_index) // self.hps['batch_size']
 
                 # Validation dataset.
-                input_dataset = tf.data.Dataset.from_tensor_slices(input_df.iloc[val_index].to_dict('list'))
+                input_dataset = tf.data.Dataset.from_tensor_slices(val_index)
                 input_dataset = input_dataset.map(make_input_features)
 
-                a_target_dataset = tf.data.Dataset.from_tensor_slices(input_df.iloc[val_index].to_dict('list'))
+                a_target_dataset = tf.data.Dataset.from_tensor_slices(val_index)
                 a_target_dataset = a_target_dataset.map(make_a_target_features)
 
-                target_dataset = tf.data.Dataset.from_tensor_slices(target_scored_df.iloc[val_index].to_dict('list'))
+                target_dataset = tf.data.Dataset.from_tensor_slices(val_index)
                 target_dataset = target_dataset.map(make_target_features)
 
                 f_target_dataset = tf.data.Dataset.zip((a_target_dataset, target_dataset)).map(divide_inputs)
@@ -794,6 +812,12 @@ class MoAPredictor(object):
                                   , write_images=True
                                   , update_freq='epoch')
 
+        earlystopping = EarlyStopping(monitor='val_loss'
+                                      , min_delta=0
+                                      , patience=5
+                                      , verbose=1
+                                      , mode='auto')
+
         '''
         def schedule_lr(e_i):
             self.hps['lr'] = self.hps['reduce_lr_factor'] * self.hps['lr']
@@ -808,14 +832,14 @@ class MoAPredictor(object):
                                                 , verbose=1
                                                 , save_best_only=True)
 
-            self.model.fit_generator(self.trval_dataset[0]
+            hist = self.model.fit_generator(self.trval_dataset[0]
                                                 , steps_per_epoch=self.step
                                                 , epochs=self.hps['epochs']
                                                 , verbose=1
                                                 , max_queue_size=80
                                                 , workers=4
                                                 , use_multiprocessing=False
-                                                , callbacks=[model_check_point, reduce_lr] #, tensorboard]
+                                                , callbacks=[model_check_point, earlystopping] #, reduce_lr] #, tensorboard]
                                                 , validation_data=self.trval_dataset[1]
                                                 , validation_freq=1
                                                 , shuffle=True)
@@ -826,14 +850,14 @@ class MoAPredictor(object):
                                                     , verbose=1
                                                     , save_best_only=True)
 
-                self.k_fold_models[i].fit_generator(self.k_fold_trval_datasets[i][0]
+                hist = self.k_fold_models[i].fit_generator(self.k_fold_trval_datasets[i][0]
                                                     , steps_per_epoch=self.step
                                                     , epochs=self.hps['epochs']
                                                     , verbose=1
                                                     , max_queue_size=80
                                                     , workers=4
                                                     , use_multiprocessing=False
-                                                    , callbacks=[model_check_point, reduce_lr] #, tensorboard]
+                                                    , callbacks=[model_check_point, earlystopping] #reduce_lr] #, tensorboard]
                                                     , validation_data=self.k_fold_trval_datasets[i][1]
                                                     , validation_freq=1
                                                     , shuffle=True)
@@ -843,12 +867,13 @@ class MoAPredictor(object):
         #print('Save the model.')
         #self.model.save(self.MODEL_PATH, save_format='h5')
         # self.model.save(self.MODEL_PATH, save_format='tf')
+        return hist
 
     def evaluate(self):
         """Evaluate."""
         assert self.conf['cv_type'] == CV_TYPE_TRAIN_VAL_SPLIT
 
-        input_df = pd.read_csv(os.path.join(self.raw_data_path, 'train_features.csv')).iloc[:1024]
+        input_df = pd.read_csv(os.path.join(self.raw_data_path, 'train_features.csv')) #.iloc[:1024]
         input_df.cp_type = input_df.cp_type.astype('category')
         input_df.cp_type = input_df.cp_type.cat.rename_categories(range(len(input_df.cp_type.cat.categories)))
         input_df.cp_time = input_df.cp_time.astype('category')
@@ -858,8 +883,8 @@ class MoAPredictor(object):
 
         # Remove samples of ctl_vehicle.
         valid_indexes = input_df.cp_type == 1  # ?
-        target_scored_df = pd.read_csv(os.path.join(self.raw_data_path, 'train_targets_scored.csv')).iloc[:1024]
-        target_scored_df = target_scored_df.iloc[self.val_index]
+        target_scored_df = pd.read_csv(os.path.join(self.raw_data_path, 'train_targets_scored.csv')) #.iloc[:1024]
+        target_scored_df = target_scored_df.loc[self.val_index]
         MoA_annots = target_scored_df.columns[1:]
 
         def make_input_features(inputs):
@@ -880,7 +905,7 @@ class MoAPredictor(object):
             return (tf.expand_dims(treatment_type, axis=-1), gene_exps, cell_vs)
 
         # Validation dataset.
-        val_dataset = tf.data.Dataset.from_tensor_slices(input_df.iloc[self.val_index].to_dict('list'))
+        val_dataset = tf.data.Dataset.from_tensor_slices(input_df.loc[self.val_index].to_dict('list'))
         val_dataset = val_dataset.map(make_input_features)
 
         val_iter = val_dataset.as_numpy_iterator()

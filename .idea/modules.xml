@@ -3,6 +3,8 @@
   <component name="ProjectModuleManager">
     <modules>
       <module fileurl="file://$PROJECT_DIR$/.idea/MoA.iml" filepath="$PROJECT_DIR$/.idea/MoA.iml" />
+      <module fileurl="file://$PROJECT_DIR$/../deep-reinforcement-learning-based-optimization/.idea/deep-reinforcement-learning-based-optimization.iml" filepath="$PROJECT_DIR$/../deep-reinforcement-learning-based-optimization/.idea/deep-reinforcement-learning-based-optimization.iml" />
+      <module fileurl="file://$PROJECT_DIR$/../keras_unsupervised/.idea/keras_unsupervised.iml" filepath="$PROJECT_DIR$/../keras_unsupervised/.idea/keras_unsupervised.iml" />
     </modules>
   </component>
 </project>

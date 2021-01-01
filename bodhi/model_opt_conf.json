@@ -1,0 +1,56 @@
+{
+	"resource_path": "D:\\PycharmProjects\\MoA\\resource\\lish-moa",
+	"opt_type": "rl_opt",
+	"training_strategy": "max",
+	"hps": {
+		"batch_size": 1,
+		"eta": 0.14171693669969843,
+		"steps": 128,
+		"trials": 128
+	},
+
+	"nn_arch": {
+		"state_dim": 64
+	},
+
+	"critic_conf": {
+		"model_loading": false,
+		"multi_gpu": false,
+		"num_gpus": 4,
+
+		"hps": {
+			"lr": 1.7432931291745354e-07,
+			"beta_1": 0.3419040868249906,
+			"beta_2": 0.6407928896890734,
+			"decay": 0.1996736822816
+		},
+
+		"nn_arch": {
+			"action_dim": 4,
+			"num_layers": 2,
+			"dense_layer_dim": 64
+		}
+	},
+
+	"actor_conf": {
+		"model_loading": false,
+		"multi_gpu": false,
+		"num_gpus": 4,
+
+		"hps": {
+			"lr": 0.047,
+			"beta_1": 0.7679712746737258,
+			"beta_2": 0.6985202077855178,
+			"decay": 0.5472529278138007
+		},
+
+		"nn_arch": {
+			"state_dim": 64,
+			"action_dim": 4,
+			"num_layers": 2,
+			"dense_layer_dim": 64,
+			"dense1_dim": 64,
+			"epsilon_p": 0.16389753580478367
+		}
+	}
+}
