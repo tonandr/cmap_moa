@@ -1,8 +1,7 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <project version="4">
   <component name="ChangeListManager">
-    <list default="true" id="a635c1b4-d82f-4967-a773-56ab4f41b382" name="Default Changelist" comment="">
-      <change afterPath="$PROJECT_DIR$/analysis/hp_opt_analysis.txt" afterDir="false" />
+    <list default="true" id="a635c1b4-d82f-4967-a773-56ab4f41b382" name="Default Changelist" comment="-moa.py is changed to moa_pred.py.&#10;-moa_trainer.py is added.">
       <change afterPath="$PROJECT_DIR$/analysis/results/sample0.jpg" afterDir="false" />
       <change afterPath="$PROJECT_DIR$/analysis/results/sample1.jpg" afterDir="false" />
       <change afterPath="$PROJECT_DIR$/analysis/results/sample10.jpg" afterDir="false" />
@@ -3949,7 +3948,6 @@
       <change afterPath="$PROJECT_DIR$/analysis/results_v7/sample940.jpg" afterDir="false" />
       <change afterPath="$PROJECT_DIR$/analysis/results_v7/sample960.jpg" afterDir="false" />
       <change afterPath="$PROJECT_DIR$/analysis/results_v7/sample980.jpg" afterDir="false" />
-      <change afterPath="$PROJECT_DIR$/analysis/sample.xls" afterDir="false" />
       <change afterPath="$PROJECT_DIR$/analysis/v18/MoA_pred_conf.json" afterDir="false" />
       <change afterPath="$PROJECT_DIR$/analysis/v18/MoA_predictor.h5" afterDir="false" />
       <change afterPath="$PROJECT_DIR$/analysis/v19/MoA_pred_conf.json" afterDir="false" />
@@ -3990,12 +3988,8 @@
       <change afterPath="$PROJECT_DIR$/bodhi/MoA_predictor/saved_model.pb" afterDir="false" />
       <change afterPath="$PROJECT_DIR$/bodhi/MoA_predictor/variables/variables.data-00000-of-00001" afterDir="false" />
       <change afterPath="$PROJECT_DIR$/bodhi/MoA_predictor/variables/variables.index" afterDir="false" />
-      <change afterPath="$PROJECT_DIR$/bodhi/moa_trainer.py" afterDir="false" />
-      <change afterPath="$PROJECT_DIR$/bodhi/model_opt_conf.json" afterDir="false" />
       <change afterPath="$PROJECT_DIR$/bodhi/opt_actor.h5" afterDir="false" />
       <change afterPath="$PROJECT_DIR$/bodhi/opt_critic.h5" afterDir="false" />
-      <change afterPath="$PROJECT_DIR$/bodhi/training_result.csv" afterDir="false" />
-      <change afterPath="$PROJECT_DIR$/bodhi/training_result_rs.csv" afterDir="false" />
       <change afterPath="$PROJECT_DIR$/submission/v3_n.zip" afterDir="false" />
       <change afterPath="$PROJECT_DIR$/submission/v3_n/MoA_predictor/saved_model.pb" afterDir="false" />
       <change afterPath="$PROJECT_DIR$/submission/v3_n/MoA_predictor/variables/variables.data-00000-of-00001" afterDir="false" />
@@ -4033,24 +4027,36 @@
       <change afterPath="$PROJECT_DIR$/../deep-reinforcement-learning-based-optimization/cosw/drl_opt/est_w_mean_qac.csv" afterDir="false" />
       <change afterPath="$PROJECT_DIR$/../deep-reinforcement-learning-based-optimization/cosw/drl_opt/model_opt_conf.json" afterDir="false" />
       <change afterPath="$PROJECT_DIR$/../deep-reinforcement-learning-based-optimization/cosw/drl_opt/training_result_rs.csv" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/../../workspace/inpainting/.idea/inspectionProfiles/Project_Default.xml" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/../../workspace/inpainting/.idea/inspectionProfiles/profiles_settings.xml" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/../../workspace/inpainting/.idea/modules.xml" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/.idea/MoA.iml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/MoA.iml" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/.idea/modules.xml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/modules.xml" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/.idea/workspace.xml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/workspace.xml" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/bodhi/MoA_pred_conf.json" beforeDir="false" afterPath="$PROJECT_DIR$/bodhi/MoA_pred_conf.json" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/bodhi/__init__.py" beforeDir="false" afterPath="$PROJECT_DIR$/bodhi/__init__.py" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/bodhi/moa" beforeDir="false" afterPath="$PROJECT_DIR$/bodhi/moa_pred.py" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/../deep-reinforcement-learning-based-optimization/.idea/modules.xml" beforeDir="false" afterPath="$PROJECT_DIR$/../deep-reinforcement-learning-based-optimization/.idea/modules.xml" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/../deep-reinforcement-learning-based-optimization/.idea/workspace.xml" beforeDir="false" afterPath="$PROJECT_DIR$/../deep-reinforcement-learning-based-optimization/.idea/workspace.xml" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/../deep-reinforcement-learning-based-optimization/cosw/drl_opt/opt_via_rl.py" beforeDir="false" afterPath="$PROJECT_DIR$/../deep-reinforcement-learning-based-optimization/cosw/drl_opt/opt_via_rl.py" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/../deep-reinforcement-learning-based-optimization/cosw/drl_opt/opt_via_rl_trainer.py" beforeDir="false" afterPath="$PROJECT_DIR$/../deep-reinforcement-learning-based-optimization/cosw/drl_opt/opt_via_rl_trainer.py" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/../deep-reinforcement-learning-based-optimization/cosw/drl_opt/reg_opt_via_conf.json" beforeDir="false" afterPath="$PROJECT_DIR$/../deep-reinforcement-learning-based-optimization/cosw/drl_opt/reg_opt_via_conf.json" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/../keras_unsupervised/ku/applications_ext/nobody_convnet3d.py" beforeDir="false" afterPath="$PROJECT_DIR$/../keras_unsupervised/ku/applications_ext/nobody_convnet3d.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/../keras_unsupervised/ku/image_utils/utility.py" beforeDir="false" afterPath="$PROJECT_DIR$/../keras_unsupervised/ku/image_utils/utility.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/../keras_unsupervised/ku/loss_ext/loss.py" beforeDir="false" afterPath="$PROJECT_DIR$/../keras_unsupervised/ku/loss_ext/loss.py" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/../keras_unsupervised/setup.py" beforeDir="false" afterPath="$PROJECT_DIR$/../keras_unsupervised/setup.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/../../workspace/inpainting/.pydevproject" beforeDir="false" afterPath="$PROJECT_DIR$/../../workspace/inpainting/.pydevproject" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/../../workspace/inpainting/bodhi/inpainting/inpainting.py" beforeDir="false" afterPath="$PROJECT_DIR$/../../workspace/inpainting/bodhi/inpainting/inpainting.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/../../workspace/inpainting/bodhi/inpainting/inpainting_gan_conf.json" beforeDir="false" afterPath="$PROJECT_DIR$/../../workspace/inpainting/bodhi/inpainting/inpainting_gan_conf.json" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/../../workspace/inpainting/bodhi/inpainting/inpainting_trainer.py" beforeDir="false" afterPath="$PROJECT_DIR$/../../workspace/inpainting/bodhi/inpainting/inpainting_trainer.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/../../workspace/inpainting/bodhi/inpainting/opt_via_rl_conf.json" beforeDir="false" afterPath="$PROJECT_DIR$/../../workspace/inpainting/bodhi/inpainting/opt_via_rl_conf.json" afterDir="false" />
     </list>
     <option name="SHOW_DIALOG" value="false" />
     <option name="HIGHLIGHT_CONFLICTS" value="true" />
     <option name="HIGHLIGHT_NON_ACTIVE_CHANGELIST" value="false" />
     <option name="LAST_RESOLUTION" value="IGNORE" />
+  </component>
+  <component name="ChangesViewManager">
+    <option name="groupingKeys">
+      <option value="directory" />
+    </option>
   </component>
   <component name="Git.Settings">
     <option name="RECENT_BRANCH_BY_REPOSITORY">
@@ -4058,7 +4064,7 @@
         <entry key="$PROJECT_DIR$/../keras_unsupervised" value="master" />
       </map>
     </option>
-    <option name="RECENT_GIT_ROOT_PATH" value="$PROJECT_DIR$" />
+    <option name="RECENT_GIT_ROOT_PATH" value="$PROJECT_DIR$/../keras_unsupervised" />
   </component>
   <component name="ProjectId" id="1iZjbewd5h0VRhbIlX8luaLjuUR" />
   <component name="ProjectLevelVcsManager" settingsEditedManually="true" />
@@ -4069,8 +4075,8 @@
   <component name="PropertiesComponent">
     <property name="RunOnceActivity.OpenProjectViewOnStart" value="true" />
     <property name="RunOnceActivity.ShowReadmeOnStart" value="true" />
-    <property name="last_opened_file_path" value="$PROJECT_DIR$/../deep-reinforcement-learning-based-optimization/cosw/drl_opt/opt_via_rl.py" />
-    <property name="settings.editor.selected.configurable" value="editor.preferences.fonts.default" />
+    <property name="last_opened_file_path" value="$PROJECT_DIR$/../../workspace/inpainting" />
+    <property name="settings.editor.selected.configurable" value="com.jetbrains.python.configuration.PyActiveSdkModuleConfigurable" />
   </component>
   <component name="RunManager" selected="Python.moa_trainer">
     <configuration name="moa_pred" type="PythonConfigurationType" factoryName="Python" nameIsGenerated="true">
@@ -4154,6 +4160,14 @@
       <option name="presentableId" value="Default" />
       <updated>1608445945338</updated>
     </task>
+    <task id="LOCAL-00001" summary="-moa.py is changed to moa_pred.py.&#10;-moa_trainer.py is added.">
+      <created>1609485035065</created>
+      <option name="number" value="00001" />
+      <option name="presentableId" value="LOCAL-00001" />
+      <option name="project" value="LOCAL" />
+      <updated>1609485035065</updated>
+    </task>
+    <option name="localTasksCounter" value="2" />
     <servers />
   </component>
   <component name="Vcs.Log.Tabs.Properties">
@@ -4184,8 +4198,17 @@
             </State>
           </value>
         </entry>
+        <entry key="MAIN">
+          <value>
+            <State />
+          </value>
+        </entry>
       </map>
     </option>
     <option name="oldMeFiltersMigrated" value="true" />
+  </component>
+  <component name="VcsManagerConfiguration">
+    <MESSAGE value="-moa.py is changed to moa_pred.py.&#10;-moa_trainer.py is added." />
+    <option name="LAST_COMMIT_MESSAGE" value="-moa.py is changed to moa_pred.py.&#10;-moa_trainer.py is added." />
   </component>
 </project>

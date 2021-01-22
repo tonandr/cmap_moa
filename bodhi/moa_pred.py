@@ -7,6 +7,9 @@ import os
 import time
 import json
 from random import shuffle
+import ctypes
+
+#ctypes.WinDLL('cudart64_110.dll') #?
 
 import numpy as np
 import pandas as pd
@@ -706,7 +709,7 @@ class MoAPredictor(object):
                 MoA_p_sets.append(no_MoA_p_set[:int(-1.0 * len(no_MoA_p_set) * self.conf['val_ratio'])])
 
                 idxes = []
-                for i in tqdm(range(self.hps['rep'])):
+                for i in range(self.hps['rep']):
                     for col in range(len(target_scored_df.columns) + 1):
                         if len(MoA_p_sets[col]) >= (i + 1):
                             idx = MoA_p_sets[col][i]
@@ -832,7 +835,7 @@ class MoAPredictor(object):
                                                 , verbose=1
                                                 , save_best_only=True)
 
-            hist = self.model.fit_generator(self.trval_dataset[0]
+            hist = self.model.fit(self.trval_dataset[0]
                                                 , steps_per_epoch=self.step
                                                 , epochs=self.hps['epochs']
                                                 , verbose=1
@@ -850,7 +853,7 @@ class MoAPredictor(object):
                                                     , verbose=1
                                                     , save_best_only=True)
 
-                hist = self.k_fold_models[i].fit_generator(self.k_fold_trval_datasets[i][0]
+                hist = self.k_fold_models[i].fit(self.k_fold_trval_datasets[i][0]
                                                     , steps_per_epoch=self.step
                                                     , epochs=self.hps['epochs']
                                                     , verbose=1
