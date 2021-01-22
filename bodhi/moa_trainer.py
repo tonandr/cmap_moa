@@ -115,7 +115,7 @@ class ModelTrainer(Trainer):
         """Critic."""
 
         # Constants.
-        MODEL_PATH = 'opt_critic'
+        MODEL_PATH = 'opt_critic.h5'
 
         def __init__(self, resource_path, conf):
             """
@@ -198,7 +198,7 @@ class ModelTrainer(Trainer):
         """Actor."""
 
         # Constants.
-        MODEL_PATH = 'opt_actor'
+        MODEL_PATH = 'opt_actor.h5'
 
         def __init__(self, resource_path, conf):
             """
@@ -258,7 +258,6 @@ class ModelTrainer(Trainer):
                 l2 = Lambda(lambda x: K.clip(x
                                             , 1.0 - epsilon_p
                                             , 1.0 + epsilon_p))(r)
-                l2 = Lambda(lambda x: x[0] * x[1])([input_td_error, l2])
                 l2 = Lambda(lambda x: x[0] * x[1])([input_td_error, l2])
                 output = Lambda(lambda x: K.minimum(x[0], x[1]))([l1, l2])
 
@@ -447,7 +446,7 @@ class ModelTrainer(Trainer):
 
                 f_conf['nn_arch']['dropout_rate'] = s_funcs[2](hp_norm[2])
                 f_conf['nn_arch']['d_cv_init'] = int(s_funcs[3](hp_norm[3]))
-                f_conf['nn_arch']['d_get_init'] = int(8 * s_funcs[3](hp_norm[3]))
+                f_conf['nn_arch']['d_gep_init'] = int(8 * s_funcs[3](hp_norm[3]))
                 f_conf['nn_arch']['d_f_init'] = int(4 * s_funcs[3](hp_norm[3]))
 
                 # Train.
@@ -485,13 +484,13 @@ class ModelTrainer(Trainer):
             if self.conf['training_strategy'] == TRAINING_STRATEGY_MAX:
                 if rs.mean() > rs_min:
                     print('Save the model.')
-                    self.critic.model.save(self.critic.MODEL_PATH)
-                    self.actor.model.save(self.actor.MODEL_PATH)
+                    self.critic.model.save(self.critic.MODEL_PATH, save_format='h5')
+                    self.actor.model.save(self.actor.MODEL_PATH, save_format='h5')
                     rs_min = rs.mean()
             elif self.conf['training_strategy'] == TRAINING_STRATEGY_CONTINUE:
                 print('Save the model.')
-                self.critic.model.save(self.critic.MODEL_PATH)
-                self.actor.model.save(self.actor.MODEL_PATH)
+                self.critic.model.save(self.critic.MODEL_PATH, save_format='h5')
+                self.actor.model.save(self.actor.MODEL_PATH, save_format='h5')
             else:
                 raise ValueError('Training strategy is not valid.')
 
@@ -505,7 +504,7 @@ class ModelTrainer(Trainer):
             self.action = self.act(self.state)
 
             # Save the training result.
-            tr_res_df.to_csv('training_result.csv', index=False)
+            tr_res_df.to_csv('training_result_rs.csv', index=False)
 
     def optimize_via_random_search(self, f_conf):
         """Optimize the model via Random Search."""
@@ -530,7 +529,7 @@ class ModelTrainer(Trainer):
 
             f_conf['nn_arch']['dropout_rate'] = s_funcs[2](hp_norm[2])
             f_conf['nn_arch']['d_cv_init'] = int(s_funcs[3](hp_norm[3]))
-            f_conf['nn_arch']['d_get_init'] = int(8 * s_funcs[3](hp_norm[3]))
+            f_conf['nn_arch']['d_gep_init'] = int(8 * s_funcs[3](hp_norm[3]))
             f_conf['nn_arch']['d_f_init'] = int(4 * s_funcs[3](hp_norm[3]))
 
             # Train.
