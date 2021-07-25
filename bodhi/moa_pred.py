@@ -6,6 +6,7 @@ Created on Oct 8, 2020
 import os
 import time
 import json
+import random
 from random import shuffle
 import ctypes
 
@@ -838,7 +839,7 @@ class MoAPredictor(object):
             hist = self.model.fit(self.trval_dataset[0]
                                                 , steps_per_epoch=self.step
                                                 , epochs=self.hps['epochs']
-                                                , verbose=1
+                                                , verbose=0
                                                 , max_queue_size=80
                                                 , workers=4
                                                 , use_multiprocessing=False
@@ -1111,6 +1112,7 @@ def main():
     seed = int(time.time())
     # seed = 1606208227
     print(f'Seed:{seed}')
+    random.seed(seed)
     np.random.seed(seed)
     tf.random.set_seed(seed)
 
