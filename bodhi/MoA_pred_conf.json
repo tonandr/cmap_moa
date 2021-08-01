@@ -7,7 +7,7 @@
 	"cv_type": "train_val_split",
 	"dataset_type": "balanced",
 	"val_ratio": 0.1,
-	"loss_type": "multi_label",
+	"loss_type": "additive_angular_margin",
 	"data_aug": false,
 
 	"hps": {
@@ -15,7 +15,7 @@
 		"beta_1": 0.999,
 		"beta_2": 0.999,
 		"decay": 0.0,
-		"epochs": 1,
+		"epochs": 12,
 		"batch_size": 64,
 		"reduce_lr_factor": 0.99,
 		"ls": 0.0,

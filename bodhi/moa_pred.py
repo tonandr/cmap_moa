@@ -381,6 +381,7 @@ class _MoAPredictor(Layer):
         x = self.dense_4_3(x)
         x = self.dropout_4_3(x)
 
+
         # Normalize x.
         if self.conf['loss_type'] == LOSS_TYPE_MULTI_LABEL:
             x1 = self.dense_4_4(x)
@@ -389,7 +390,6 @@ class _MoAPredictor(Layer):
             x1 = self.dense_4_4(x)
         else:
             raise ValueError('loss type is not valid.')
-
         outputs = [x_g, x_c, x1]
         return outputs
 
@@ -584,12 +584,16 @@ class MoAPredictor(object):
         moa_names = [v for v in range(self.nn_arch['num_moa_annotation'])]
 
         def get_series_from_input(idxes):
-            idxes = idxes.numpy()
+            idxes = idxes.numpy() #?
             series = input_df.iloc[idxes]
 
             # Treatment.
-            cp_time = series['cp_time'].values.to_numpy()
-            cp_dose = series['cp_dose'].values.to_numpy()
+            if isinstance(idxes, np.int32) != True:
+                cp_time = series['cp_time'].values.to_numpy()
+                cp_dose = series['cp_dose'].values.to_numpy()
+            else:
+                cp_time = np.asarray(series['cp_time'])
+                cp_dose = np.asarray(series['cp_dose'])
 
             treatment_type = cp_time * 2 + cp_dose
 
@@ -609,12 +613,12 @@ class MoAPredictor(object):
 
 
         def make_input_features(idx):
-            treatment_type, gene_exps, cell_vs = tf.py_function(get_series_from_input, inp=[idx], Tout=[tf.int32, tf.float64, tf.float64])
+            treatment_type, gene_exps, cell_vs = tf.py_function(get_series_from_input, inp=[idx], Tout=[tf.int64, tf.float64, tf.float64])
             return treatment_type, gene_exps, cell_vs
 
 
         def make_a_target_features(idx):
-            treatment_type, gene_exps, cell_vs = tf.py_function(get_series_from_input, inp=[idx], Tout=[tf.int32, tf.float64, tf.float64])
+            treatment_type, gene_exps, cell_vs = tf.py_function(get_series_from_input, inp=[idx], Tout=[tf.int64, tf.float64, tf.float64])
             return gene_exps, cell_vs
 
 
@@ -839,7 +843,7 @@ class MoAPredictor(object):
             hist = self.model.fit(self.trval_dataset[0]
                                                 , steps_per_epoch=self.step
                                                 , epochs=self.hps['epochs']
-                                                , verbose=0
+                                                , verbose=1
                                                 , max_queue_size=80
                                                 , workers=4
                                                 , use_multiprocessing=False
@@ -1130,7 +1134,7 @@ def main():
 
         print('Elasped time: {0:f}s'.format(te - ts))
     elif conf['mode'] == 'evaluate':
-        # Train.
+        # Evaluate.
         model = MoAPredictor(conf)
 
         ts = time.time()
