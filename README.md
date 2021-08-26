@@ -1,5 +1,5 @@
 # Mechanisms of Action (MoA) Prediction for CMAP
-## Additive margin and autoencoder based MoA prediction models.
+## Additive angular margin and autoencoder based MoA prediction models.
 ![Imgur](pics/drug_features_clustering_moa_colors.png)
 These models was developed in the MoA Prediction contest hosted by Kaggle.
 Via moa-camp.ipynb, drugs' clustering map for MoA can be checked in the case the additive margin loss was used.
