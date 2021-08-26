@@ -5,6 +5,7 @@ These models was developed in the MoA Prediction contest hosted by Kaggle.
 Via moa-camp.ipynb, drugs' clustering map for MoA can be checked in the case the additive margin loss was used.
 
 [Kaggle's MoA Prediction Contest](https://www.kaggle.com/c/lish-moa)
+
 [Kaggle's notebook: Drug features clustering according to mechanisms of action](https://www.kaggle.com/gutomitai/drug-features-clustering-according-to-moa)
 
 ## Status
