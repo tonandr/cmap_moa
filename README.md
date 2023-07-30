@@ -9,6 +9,6 @@ Via moa-camp.ipynb, drugs' clustering map for MoA can be checked in the case the
 [Kaggle's notebook: Drug features clustering according to mechanisms of action](https://www.kaggle.com/gutomitai/drug-features-clustering-according-to-moa)
 
 ## Status
-First release. According to keras_unsupervised 1.1.13.dev1, these models will be modified.
+This project is closed.
 
 
